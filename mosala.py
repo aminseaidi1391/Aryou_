@@ -85,7 +85,7 @@ with app.app_context():
             Card(page_name='home', icon='📚', title='روش ما', content='ترکیبی از آموزش منظم، فعالیت‌های دانش‌آموزی و فضایی دوستانه برای یادگیری بهتر.'),
             Card(page_name='home', icon='🏫', title='ما کی هستیم', content='مدرسه دولتی پسرانه در ارومیه.'),
             Card(page_name='home', icon='💻', title='طراح سایت', content='محمد امیر سعیدی و امیرعباس قاسمی'),
-            Card(page_name='home', icon='💻', title='آیدی', content='\nآیدی ایتا سعیدی: @amin_Hr\nآیدی روبیکا سعیدی: @AMINHANDALA\nآیدی روبیکا قاسمی:@xode_Griffin\nآیدی ایتا قاسمی:@Amir_ghasemi1390'),
+            Card(page_name='home', icon='📱', title='آیدی', content='\nآیدی ایتا سعیدی: @amin_Hr\nآیدی روبیکا سعیدی: @AMINHANDALA\nآیدی روبیکا قاسمی:@xode_Griffin\nآیدی ایتا قاسمی:@Amir_ghasemi1390'),
             Card(page_name='about', icon='🏫', title='تاریخچه مدرسه', content='مدرسه ما با سال‌ها تجربه در زمینه آموزش و پرورش، همواره در تلاش بوده تا محیطی پویا و با نشاط برای دانش‌آموزان فراهم کند.'),
             Card(page_name='about', icon='🎯', title='اهداف ما', content='تربیت نسلی پویا، خلاق و متعهد برای ساختن آینده‌ای روشن‌تر.'),
             Card(page_name='about', icon='🌟', title='جای خالی شما', content='این کادر می‌تواند به دستان شما پر شود...'),
