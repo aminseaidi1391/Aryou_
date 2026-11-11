@@ -45,7 +45,6 @@ class Card(db.Model):
 def load_user(user_id):
     return User.query.get(int(user_id))
 with app.app_context():
-    db.drop_all()
     db.create_all()
     
     if not User.query.filter_by(email='admin@site.com').first():
@@ -85,7 +84,8 @@ with app.app_context():
         cards = [
             Card(page_name='home', icon='📚', title='روش ما', content='ترکیبی از آموزش منظم، فعالیت‌های دانش‌آموزی و فضایی دوستانه برای یادگیری بهتر.'),
             Card(page_name='home', icon='🏫', title='ما کی هستیم', content='مدرسه دولتی پسرانه در ارومیه.'),
-            Card(page_name='home', icon='💻', title='طراح سایت', content='محمد امیر سعیدی و امیرعباس قاسمی\nآیدی ایتا: @amin_hr\nآیدی روبیکا: @AMINHANDALA'),
+            Card(page_name='home', icon='💻', title='طراح سایت', content='محمد امیر سعیدی و امیرعباس قاسمی\nآیدی ایتا: @amin_Hr\nآیدی روبیکا: @AMINHANDALA\n@xode_Griffin'),
+            Card(page_name='home', icon='💻', title='طراح سایت', content='محمد امیر سعیدی و امیرعباس قاسمی\nآیدی ایتا: @amin_Hr\nآیدی روبیکا: @AMINHANDALA\n@'),
             Card(page_name='about', icon='🏫', title='تاریخچه مدرسه', content='مدرسه ما با سال‌ها تجربه در زمینه آموزش و پرورش، همواره در تلاش بوده تا محیطی پویا و با نشاط برای دانش‌آموزان فراهم کند.'),
             Card(page_name='about', icon='🎯', title='اهداف ما', content='تربیت نسلی پویا، خلاق و متعهد برای ساختن آینده‌ای روشن‌تر.'),
             Card(page_name='about', icon='🌟', title='جای خالی شما', content='این کادر می‌تواند به دستان شما پر شود...'),
