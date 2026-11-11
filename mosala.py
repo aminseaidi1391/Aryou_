@@ -45,6 +45,7 @@ class Card(db.Model):
 def load_user(user_id):
     return User.query.get(int(user_id))
 with app.app_context():
+    db.drop_all()
     db.create_all()
     
     if not User.query.filter_by(email='admin@site.com').first():
