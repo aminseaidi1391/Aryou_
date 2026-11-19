@@ -40,7 +40,7 @@ def load_data():
             "home": [
                 {"title": "ما کی هستیم", "text": "مدرسه دولتی پسرانه در ارومیه", "icon": "fa-school"},
                 {"title": "طراح سایت", "text": "محمد امین سعیدی و امیرعباس قاسمی", "icon": "fa-laptop-code"},
-                {"title": "آیدی", "text": "آیدی ایتای سعیدی:@amin_Hr <br> آیدی ایتای قاسمی:@Amir_ghasemi1390", "icon": "fa-mobile-alt"},
+                {"title": "آیدی", "text": "آیدی ایتای سعیدی:@amin_Hr <br> آیدی ایتای قاسمی:@Amir_ghasemi1390 <br> آیدی روبیکای سعیدی:@AMINHANDALA <br> آیدی روبیکای قاسمی:@xode_Griffin", "icon": "fa-mobile-alt"},
                 {"title": "روش ما", "text": "ترکیبی از آموزش منظم، فعالیت‌های دانش‌آموزی و فضایی دوستانه برای یادگیری بهتر", "icon": "fa-book-open"},
                 {"title": "کتابخانه", "text": "فضایی آرام برای مطالعه، امانت کتاب و رشد اندیشه", "icon": "fa-book"}
             ],
