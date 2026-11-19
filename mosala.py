@@ -302,6 +302,14 @@ def login():
         return redirect(url_for('home'))
     return render_template_string(AUTH_HTML, error="نام کاربری یا رمز عبور اشتباه است.")
 
+@app.route('/register', methods=['GET', 'POST'])
+def register():
+    if request.method == 'POST':
+        # منطق ثبت‌نام
+        pass
+    # این خط صفحه ثبت‌نام را نمایش می‌دهد (اگر از تمپلیت استفاده می‌کنید)
+    return render_template_string(AUTH_HTML)
+
 @app.route('/logout')
 def logout():
     session.clear()
@@ -622,6 +630,8 @@ def delete_user(username):
         del data['users'][username]
         save_data(data)
     return redirect(url_for('admin', msg='کاربر حذف شد.'))
+
+
 
 # ==========================================
 # اجرای برنامه (مخصوص رندر و لوکال)
