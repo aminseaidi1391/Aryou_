@@ -1,340 +1,604 @@
+import json
 import os
-from flask import Flask, render_template_string, request, redirect, url_for, flash
-from flask_sqlalchemy import SQLAlchemy
-from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
-from werkzeug.security import generate_password_hash, check_password_hash
-from werkzeug.utils import secure_filename
+from flask import Flask, render_template_string, request, redirect, url_for, session
 
 app = Flask(__name__)
-app.secret_key = 'super_secret_key_123'
+app.secret_key = 'super_secret_key_1403'
+DATA_FILE = 'school_data.json'
 
-database_url = os.environ.get('DATABASE_URL', 'sqlite:///site.db')
-if database_url.startswith("postgres://"):
-    database_url = database_url.replace("postgres://", "postgresql+psycopg2://", 1)
-elif database_url.startswith("postgresql://"):
-    database_url = database_url.replace("postgresql://", "postgresql+psycopg2://", 1)
-app.config['SQLALCHEMY_DATABASE_URI'] = database_url
-
-app.config['UPLOAD_FOLDER'] = os.path.join(os.getcwd(), 'static', 'uploads')
-os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
-
-db = SQLAlchemy(app)
-login_manager = LoginManager()
-login_manager.init_app(app)
-login_manager.login_view = 'login'
-class User(UserMixin, db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    email = db.Column(db.String(150), unique=True, nullable=False)
-    name = db.Column(db.String(50), nullable=False)
-    password = db.Column(db.String(255), nullable=False)
-    is_admin = db.Column(db.Boolean, default=False)
-
-class SiteContent(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    key = db.Column(db.String(50), unique=True, nullable=False)
-    value = db.Column(db.Text, nullable=False)
-
-class Card(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    page_name = db.Column(db.String(50), nullable=False)
-    icon = db.Column(db.String(10), default='📌')
-    title = db.Column(db.String(100), nullable=False)
-    content = db.Column(db.Text, nullable=False)
-
-@login_manager.user_loader
-def load_user(user_id):
-    return User.query.get(int(user_id))
-with app.app_context():
-    db.create_all()
+# ==========================================
+# مدیریت دیتای پویا (شامل کاربران)
+# ==========================================
+def load_data():
+    if os.path.exists(DATA_FILE):
+        with open(DATA_FILE, 'r', encoding='utf-8') as f:
+            try:
+                data = json.load(f)
+                if 'sections' not in data: data['sections'] = {}
+                for sec in ['home', 'staff', 'activities', 'news']:
+                    if sec not in data['sections']: data['sections'][sec] = []
+                if 'settings' not in data: data['settings'] = {}
+                if 'users' not in data: 
+                    data['users'] = {
+                        "admin": {"password": "123", "role": "مدیر سایت (شما)"},
+                        "modir": {"password": "123", "role": "مدیر مدرسه"}
+                    }
+                return data
+            except: pass
     
-    if not User.query.filter_by(email='admin@site.com').first():
-        admin = User(email='admin@site.com', name='مدیر کل', password=generate_password_hash('123456'), is_admin=True)
-        db.session.add(admin)
-        db.session.commit()
-    
-    if not SiteContent.query.first():
-        defaults = {
-            'home_title': 'جایی که درس، ایده و حال خوب کنار هم می‌نشینند.',
-            'home_text': 'ما یک مدرسه نیستیم؛ یک تیمیم. تیمی از دانش‌آموزان کنجکاو، دبیرهای پایه‌کار و کادری که با عشق و تلاش، مدرسه را به جای بهتری برای رشد و شکوفایی تبدیل می‌کنند.',
-            'home_img': '', 
-            'about_title': 'درباره مدرسه',
-            'about_text': 'آریو مصلی‌نژاد فقط یک اسم روی سربرگ نیست. یک مدرسه دولتی پسرانه در ارومیه است که با مدیریت دلسوزانه آقای سلاطین و تلاش کادر مجرب، محیطی امن و پویا برای آینده‌سازان این مرز و بوم فراهم کرده است.',
-            'about_img': '', 
-            'staff_title': 'کادر مدرسه',
-            'staff_text': 'کادری خلاق، پرانرژی و دلسوز که با مدیریت آقای سلاطین و همراهی آقای الوانی، هر روز یک روز به‌یادماندنی برای دانش‌آموزان می‌سازند.',
-            'staff_img': '', 
-            'act_title': 'فعالیت‌های آموزشی',
-            'act_text': 'درس که تمام می‌شود، آریو تازه شروع می‌شود.',
-            'act_img': '', 
-            'contact_title': 'تماس با ما',
-            'contact_text': 'حرف داری؟ زنگ بزن یا سر بزن.',
-            'contact_img': '', 
-            'contact_address_text': 'ارومیه، محله بازار باش، میدان جانبازان',
-            'contact_address_link': 'https://www.google.com/maps/search/?api=1&query=Urmia+Bazaar+Bash+Janbazan+Square',
-            'contact_phone': '۰۴۴-۳۸۶۸۷۶۸۶',
-            'news_title': 'اخبار مدرسه',
-            'news_text': 'به‌زودی اخبار جدید مدرسه در این صفحه قرار می‌گیرد.',
-            'news_img': ''
+    default_data = {
+        "users": {
+            "admin": {"password": "123", "role": "مدیر سایت (شما)"},
+            "modir": {"password": "123", "role": "مدیر مدرسه"}
+        },
+        "settings": {
+            "home_title": "جایی که درس، ایده و حال خوب کنار هم می‌نشینند.",
+            "home_subtitle": "ما یک مدرسه نیستیم؛ یک تیمیم. تیمی از دانش‌آموزان کنجکاو، دبیرهای پایه‌کار و کادری که با عشق و تلاش، مدرسه را به جای بهتری برای رشد و شکوفایی تبدیل می‌کنند.",
+            "about_text": "آریو مصلی‌نژاد فقط یک اسم روی سربرگ نیست. یک مدرسه دولتی پسرانه در ارومیه است که با مدیریت دلسوزانه آقای سلاطین و تلاش کادر مجرب، محیطی امن و پویا برای آینده‌سازان این مرز و بوم فراهم کرده است."
+        },
+        "sections": {
+            "home": [
+                {"title": "ما کی هستیم", "text": "مدرسه دولتی پسرانه در ارومیه", "icon": "fa-school"},
+                {"title": "طراح سایت", "text": "محمد امین سعیدی و امیرعباس قاسمی", "icon": "fa-laptop-code"},
+                {"title": "آیدی", "text": "ارتباط با ما از طریق شبکه‌های اجتماعی", "icon": "fa-mobile-alt"},
+                {"title": "روش ما", "text": "ترکیبی از آموزش منظم، فعالیت‌های دانش‌آموزی و فضایی دوستانه برای یادگیری بهتر", "icon": "fa-book-open"},
+                {"title": "کتابخانه", "text": "فضایی آرام برای مطالعه، امانت کتاب و رشد اندیشه", "icon": "fa-book"}
+            ],
+            "staff": [
+                {"title": "جناب آقای سلاطین", "text": "مدیر مدرسه", "icon": "fa-user-tie"},
+                {"title": "جناب آقای الوالی", "text": "معاون آموزشی", "icon": "fa-user-graduate"}
+            ],
+            "activities": [
+                {"title": "گروه هنری و تئاتر", "text": "اجرای نمایش‌های زیبا در مناسبت‌های مختلف.", "icon": "fa-theater-masks"},
+                {"title": "نشریه دانش‌آموزی", "text": "قلم و ایده دانش‌آموزان در قالب نشریه.", "icon": "fa-newspaper"},
+                {"title": "المپیاد ورزشی", "text": "رقابت سالم و پرشاط بین کلاس‌ها.", "icon": "fa-trophy"}
+            ],
+            "news": [
+                {"title": "روز دانش‌آموز", "text": "روز دانش‌آموز، روز تجلیل از آینده‌سازان این مرز و بوم است.", "icon": "fa-birthday-cake"}
+            ]
         }
-        for key, val in defaults.items(): 
-            db.session.add(SiteContent(key=key, value=val))
-        db.session.commit()
-    
-    if not Card.query.first():
-        cards = [
-            Card(page_name='home', icon='📚', title='روش ما', content='ترکیبی از آموزش منظم، فعالیت‌های دانش‌آموزی و فضایی دوستانه برای یادگیری بهتر.'),
-            Card(page_name='home', icon='🏫', title='ما کی هستیم', content='مدرسه دولتی پسرانه در ارومیه.'),
-            Card(page_name='home', icon='💻', title='طراح سایت', content='محمد امین سعیدی و امیرعباس قاسمی'),
-            Card(page_name='home', icon='📔', title='کتابخانه', content='فضایی آرام برای مطالعه، امانت کتاب و رشد اندیشه.'),
-            Card(page_name='home', icon='📱', title='آیدی', content='\nآیدی ایتا سعیدی: @amin_Hr\nآیدی روبیکا سعیدی: @AMINHANDALA\nآیدی روبیکا قاسمی:@xode_Griffin\nآیدی ایتا قاسمی:@Amir_ghasemi1390'),
-            Card(page_name='about', icon='🏫', title='تاریخچه مدرسه', content='مدرسه ما با سال‌ها تجربه در زمینه آموزش و پرورش، همواره در تلاش بوده تا محیطی پویا و با نشاط برای دانش‌آموزان فراهم کند.'),
-            Card(page_name='about', icon='🎯', title='اهداف ما', content='تربیت نسلی پویا، خلاق و متعهد برای ساختن آینده‌ای روشن‌تر.'),
-            Card(page_name='about', icon='🌟', title='جای خالی شما', content='این کادر می‌تواند به دستان شما پر شود...'),
-            Card(page_name='staff', icon='👨‍🏫', title='جناب آقای سلاطین', content='مدیر مدرسه'),
-            Card(page_name='staff', icon='👨‍💼', title='جناب آقای الوانی', content='معاون آموزشی'),
-            Card(page_name='act', icon='🏆', title='المپیاد ورزشی', content='رقابت سالم و پرنشاط بین کلاس‌ها.'),
-            Card(page_name='act', icon='📰', title='نشریه دانش‌آموزی', content='قلم و ایده دانش‌آموزان در قالب نشریه.'),
-            Card(page_name='act', icon='🎭', title='گروه هنری و تئاتر', content='اجرای نمایش‌های زیبا در مناسبت‌های مختلف.'),
-            Card(page_name='act', icon='🚌', title='اردوهای علمی', content='یادگیری خارج از کلاس درس.'),
-            Card(page_name='news', icon='📢', title='اطلاعیه ثبت‌نام', content='ثبت‌نام کلاس‌های تابستانی آغاز شد.'),
-            Card(page_name='news', icon='🎉', title='روز دانش‌آموز', content='روز دانش‌آموز، روز تجلیل از آینده‌سازان این مرز و بوم است. در این روز، مراسم ویژه‌ای با حضور دانش‌آموزان و کادر مدرسه برگزار شد.')
-        ]
-        for c in cards: 
-            db.session.add(c)
-        db.session.commit()
-        BASE_HTML = """
+    }
+    save_data(default_data)
+    return default_data
+
+def save_data(data):
+    with open(DATA_FILE, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
+        # ==========================================
+# قالب پایه (تم روشن + ریسپانسیو + افکت شیشه‌ای)
+# ==========================================
+BASE_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="fa" dir="rtl">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>مدرسه آریو مصلی‌نژاد</title>
+    <title>مدرسه آریو مصلی‌نژاد | {{ title }}</title>
+    <link href="https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/Vazirmatn-font-face.css" rel="stylesheet" type="text/css" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;700;900&display=swap');
-        body { font-family: 'Vazirmatn', sans-serif; background: #f1f5f9; color: #334155; margin: 0; padding: 0; line-height: 1.8; }
-        .navbar { background: #ffffff; box-shadow: 0 2px 10px rgba(0,0,0,0.05); padding: 15px 50px; display: flex; justify-content: space-between; align-items: center; position: sticky; top: 0; z-index: 100; }
-        .logo-area { display: flex; align-items: center; gap: 10px; font-weight: 900; color: #1e3a8a; font-size: 20px; }
-        .logo-icon { background: #3b82f6; color: white; width: 40px; height: 40px; display: flex; justify-content: center; align-items: center; border-radius: 10px; font-size: 24px; }
-        .nav-links { display: flex; gap: 10px; }
-        .nav-links a { text-decoration: none; color: #475569; padding: 8px 16px; border-radius: 8px; font-weight: 700; transition: all 0.3s ease; background: #f8fafc; }
-        .nav-links a:hover, .nav-links a.active { background: #3b82f6; color: white; box-shadow: 0 4px 15px rgba(59, 130, 246, 0.4); transform: translateY(-2px); }
-        .hero { background: linear-gradient(135deg, #bfdbfe, #93c5fd); color: #0f172a; text-align: center; padding: 80px 20px; border-radius: 30px; margin: 30px 20px; box-shadow: 0 15px 30px rgba(59, 130, 246, 0.2); border: 1px solid #60a5fa; }
-        .hero h1 { font-size: 40px; margin-bottom: 20px; font-weight: 900; color: #1e3a8a; text-shadow: 1px 1px 2px rgba(255,255,255,0.5);}
-        .hero p { font-size: 18px; max-width: 800px; margin: 0 auto 30px auto; opacity: 0.9; color: #1e293b;}
-        .hero-img { width: 100%; max-width: 600px; border-radius: 15px; box-shadow: 0 10px 25px rgba(0,0,0,0.15); margin-bottom: 30px; object-fit: cover; }
-        .container { max-width: 1000px; margin: 0 auto 50px auto; padding: 0 20px; }
-        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 25px; margin-top: 30px; }
-        .card { background: white; padding: 30px; border-radius: 20px; box-shadow: 0 5px 20px rgba(0,0,0,0.05); text-align: center; transition: 0.3s; border-bottom: 4px solid transparent; }
-        .card:hover { transform: translateY(-5px); box-shadow: 0 15px 40px rgba(0,0,0,0.1); border-bottom-color: #3b82f6; }
-        .card-icon { font-size: 40px; margin-bottom: 15px; }
-        .card h3 { color: #1e3a8a; margin-bottom: 10px; }
-        .btn { background: #3b82f6; color: white; padding: 12px 30px; border: none; border-radius: 30px; font-weight: bold; cursor: pointer; text-decoration: none; display: inline-block; transition: 0.3s; font-family: inherit; font-size: 16px;}
-        .btn:hover { background: #2563eb; transform: scale(1.05); box-shadow: 0 5px 15px rgba(37, 99, 235, 0.3);}
-        input[type="text"], input[type="email"], input[type="password"], textarea { width: 100%; padding: 15px; margin-bottom: 15px; border: 1px solid #cbd5e1; border-radius: 10px; font-family: inherit; box-sizing: border-box; background: #f8fafc; }
-        input:focus, textarea:focus { outline: none; border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2); background: white;}
-        .alert { background: #fee2e2; color: #b91c1c; padding: 15px; border-radius: 10px; margin-bottom: 20px; text-align: center; font-weight: bold;}
-        @media (max-width: 768px) { 
-            .navbar { flex-direction: column; padding: 15px 10px; gap: 15px; } 
-            .nav-links { flex-wrap: wrap; justify-content: center; } 
-            .nav-links a { padding: 6px 12px; font-size: 14px; }
-            .hero { margin: 15px 10px; padding: 40px 15px; } 
-            .hero h1 { font-size: 26px; } 
-            .grid { grid-template-columns: 1fr; } 
+        * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Vazirmatn', sans-serif; }
+        
+        /* نور آبی ملایم در پس‌زمینه همه صفحات */
+        body { 
+            background-color: #f4f7fc; 
+            background-image: radial-gradient(circle at 50% 50%, #e0f2fe 0%, #f4f7fc 60%); 
+            color: #333; 
+            min-height: 100vh; 
+        }
+        
+        /* هدر و منو */
+        header { background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(10px); padding: 15px 50px; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 2px 10px rgba(0,0,0,0.03); position: sticky; top: 0; z-index: 1000; }
+        .logo-container { display: flex; align-items: center; gap: 15px; }
+        .logo-box { width: 40px; height: 40px; background: #3b82f6; border-radius: 8px; display: flex; justify-content: center; align-items: center; color: white; font-size: 1.5rem; font-weight: bold; }
+        .logo-text { font-weight: 700; font-size: 1.1rem; color: #1e293b; }
+        .logo-text span { display: block; font-size: 0.75rem; color: #94a3b8; font-weight: 400; margin-top: 2px; }
+        
+        nav { display: flex; gap: 5px; align-items: center; }
+        nav a { text-decoration: none; color: #64748b; font-weight: 500; font-size: 0.9rem; padding: 8px 16px; border-radius: 8px; transition: all 0.3s; white-space: nowrap; }
+        nav a:hover, nav a.active { background: #eff6ff; color: #1e293b; }
+        
+        .auth-btns { display: flex; gap: 10px; }
+        .btn-outline { text-decoration: none; color: #3b82f6; border: 1px solid #3b82f6; padding: 8px 20px; border-radius: 8px; font-size: 0.9rem; font-weight: 600; transition: 0.3s; white-space: nowrap; }
+        .btn-outline:hover { background: #eff6ff; }
+        
+        /* کانتینرها */
+        .container { padding: 60px 50px; max-width: 1200px; margin: 0 auto; }
+        .page-title { text-align: center; font-size: 2.2rem; color: #1e3a8a; margin-bottom: 25px; font-weight: 800; }
+        
+        /* کادر شیشه‌ای برای متن‌ها */
+        .hero-card { 
+            background: rgba(255, 255, 255, 0.7); 
+            backdrop-filter: blur(10px); 
+            border: 1px solid rgba(255, 255, 255, 0.5);
+            padding: 30px 40px; 
+            border-radius: 20px; 
+            text-align: center; 
+            color: #475569; 
+            font-size: 1.1rem; 
+            line-height: 1.8; 
+            max-width: 900px;
+            margin: 0 auto 50px auto; 
+            box-shadow: 0 10px 30px rgba(0,0,0,0.03); 
+        }
+        
+        /* کارت‌های اصلی */
+        .grid-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 30px; justify-content: center; }
+        .card { background: #ffffff; padding: 40px 30px; border-radius: 20px; text-align: center; box-shadow: 0 4px 20px rgba(0,0,0,0.03); transition: all 0.3s ease; border: 1px solid #f1f5f9; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+        .card:hover { transform: translateY(-5px); box-shadow: 0 10px 30px rgba(0,0,0,0.06); }
+        .card i { font-size: 2.5rem; color: #3b82f6; margin-bottom: 25px; }
+        .card h3 { font-size: 1.3rem; margin-bottom: 15px; color: #1e293b; font-weight: 700; }
+        .card p { color: #64748b; line-height: 1.7; font-size: 0.95rem; }
+        
+        .btn-map { margin-top: 20px; background: #3b82f6; color: white; text-decoration: none; padding: 10px 20px; border-radius: 8px; font-size: 0.9rem; transition: 0.3s; display: inline-block; }
+        
+        /* پنل ادمین (شفاف شده تا نور پس‌زمینه از پشتش دیده بشه) */
+        .admin-section { background: rgba(255, 255, 255, 0.85); backdrop-filter: blur(10px); padding: 30px; border-radius: 20px; margin-bottom: 30px; box-shadow: 0 4px 20px rgba(0,0,0,0.03); border: 1px solid #f1f5f9; }
+        .admin-section h3 { color: #1e3a8a; margin-bottom: 20px; border-bottom: 2px solid #e0f2fe; padding-bottom: 10px; }
+        .form-group { display: flex; flex-direction: column; gap: 10px; margin-bottom: 15px; }
+        .form-group input, .form-group textarea, .form-group select { width: 100%; padding: 12px; border-radius: 8px; border: 1px solid #cbd5e1; font-family: inherit; outline: none; background: #fff; }
+        
+        .admin-form { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 20px; }
+        .admin-list-item { display: flex; justify-content: space-between; align-items: center; background: #f8fafc; padding: 15px; border-radius: 12px; border: 1px solid #e2e8f0; margin-bottom: 10px; gap: 10px; }
+        .btn-danger { background: #ef4444; color: white; text-decoration: none; padding: 8px 12px; border-radius: 8px; font-size: 0.8rem; transition: 0.3s; border: none; cursor: pointer; white-space: nowrap; }
+        .btn-success { background: #10b981; color: white; text-decoration: none; padding: 10px 20px; border-radius: 8px; font-size: 0.9rem; transition: 0.3s; border: none; cursor: pointer; font-family: inherit; font-weight: bold; }
+        .btn-warning { background: #f59e0b; color: white; text-decoration: none; padding: 8px 12px; border-radius: 8px; font-size: 0.8rem; transition: 0.3s; border: none; cursor: pointer; white-space: nowrap; }
+
+        /* ========================================== */
+        /* استایل مخصوص گوشی و تبلت (ریسپانسیو) */
+        /* ========================================== */
+        @media (max-width: 768px) {
+            header { flex-direction: column; padding: 15px 20px; gap: 15px; }
+            nav { flex-wrap: wrap; justify-content: center; width: 100%; }
+            nav a { font-size: 0.8rem; padding: 6px 10px; }
+            .auth-btns { width: 100%; justify-content: center; margin-top: 10px; }
+            
+            .container { padding: 30px 15px; }
+            .page-title { font-size: 1.8rem !important; }
+            
+            .hero-card { padding: 20px; font-size: 0.95rem; margin-bottom: 30px; }
+            
+            .grid-cards { grid-template-columns: 1fr; gap: 20px; }
+            .card { padding: 30px 20px; }
+            
+            .admin-section { padding: 20px 15px; }
+            .admin-form { flex-direction: column; }
+            .admin-form input, .admin-form select, .admin-form button { width: 100% !important; }
+            .admin-list-item { flex-direction: column; align-items: flex-start; }
+            .admin-list-item div:last-child { margin-top: 10px; align-self: flex-end; }
+            .form-group input, .form-group textarea, .form-group select { font-size: 16px; }
         }
     </style>
 </head>
 <body>
-    <nav class="navbar">
-        <div class="logo-area">
-            <div class="logo-icon">آ</div>
-            <div>آریو مصلی‌نژاد<br><span style="font-size: 12px; color: #6b7280; font-weight: normal;">ارومیه • دولتی</span></div>
+    <header>
+        <div class="logo-container">
+            <div class="logo-box">آ</div>
+            <div class="logo-text">آریو مصلی‌نژاد<span>دولتی - ارومیه</span></div>
         </div>
-        <div class="nav-links">
-            <a href="/">خانه</a>
-            <a href="/about">درباره ما</a>
-            <a href="/staff">کادر مدرسه</a>
-            <a href="/activities">فعالیت‌ها</a>
-            <a href="/news">اخبار</a>
-            <a href="/contact">تماس</a>
-            {% if current_user.is_authenticated and current_user.is_admin %}
-                <a href="/admin" style="color: #ef4444;">⚙️ پنل مدیریت</a>
+        <nav>
+            <a href="/home" class="{{ 'active' if active_page == 'home' else '' }}">خانه</a>
+            <a href="/about" class="{{ 'active' if active_page == 'about' else '' }}">درباره ما</a>
+            <a href="/staff" class="{{ 'active' if active_page == 'staff' else '' }}">کادر مدرسه</a>
+            <a href="/activities" class="{{ 'active' if active_page == 'activities' else '' }}">فعالیت‌ها</a>
+            <a href="/news" class="{{ 'active' if active_page == 'news' else '' }}">اخبار</a>
+            <a href="/contact" class="{{ 'active' if active_page == 'contact' else '' }}">تماس</a>
+            {% if session.get('role') in ["مدیر سایت (شما)", "مدیر مدرسه"] %}
+                <a href="/admin" class="{{ 'active' if active_page == 'admin' else '' }}" style="color: #d97706; font-weight: 700;">پنل مدیریت</a>
             {% endif %}
-            {% if current_user.is_authenticated %}
-                <a href="/logout" style="color: #f59e0b;">خروج ({{ current_user.name }})</a>
+        </nav>
+        <div class="auth-btns">
+            {% if session.get('username') %}
+                <span style="font-size: 0.8rem; color: #64748b; align-self: center; margin-left: 10px;">{{ session.get('role') }}</span>
+                <a href="/logout" class="btn-outline" style="color: #ef4444; border-color: #ef4444;">خروج</a>
             {% else %}
-                <a href="/login" style="color: #2563eb;">ورود / ثبت‌نام</a>
+                <a href="/" class="btn-outline">ورود</a>
             {% endif %}
         </div>
-    </nav>
-    
-    <div class="container">
-        {% with messages = get_flashed_messages() %}
-            {% if messages %}
-                {% for message in messages %}
-                    <div class="alert">{{ message }}</div>
-                {% endfor %}
-            {% endif %}
-        {% endwith %}
-    </div>
-    {{ content | safe }}
+    </header>
+    {% block content %}{% endblock %}
 </body>
 </html>
 """
-def get_content(key, default=""):
-    entry = SiteContent.query.filter_by(key=key).first()
-    return entry.value if entry else default
-
-def render_page(title_key, text_key, img_key, page_name):
-    title, text, img = get_content(title_key), get_content(text_key), get_content(img_key)
-    img_html = f'<img src="/static/uploads/{img}" class="hero-img">' if img else ""
-    cards = Card.query.filter_by(page_name=page_name).all()
-    cards_html = "".join([f'<div class="card"><div class="card-icon">{c.icon}</div><h3>{c.title}</h3><p>{c.content.replace(chr(10), "<br>")}</p></div>' for c in cards])
-    content = f'<div class="hero">{img_html}<h1>{title}</h1><p>{text}</p></div><div class="container"><div class="grid">{cards_html}</div></div>'
-    return render_template_string(BASE_HTML, content=content)
-
+AUTH_HTML = """
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ورود | مدرسه آریو مصلی‌نژاد</title>
+    <link href="https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/Vazirmatn-font-face.css" rel="stylesheet" type="text/css" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Vazirmatn', sans-serif; }
+        body { background: #0f172a; height: 100vh; display: flex; justify-content: center; align-items: center; overflow: hidden; position: relative; }
+        
+        .glow { position: absolute; width: 600px; height: 600px; background: radial-gradient(circle, rgba(79,70,229,0.4) 0%, rgba(15,23,42,0) 70%); top: -200px; left: -200px; border-radius: 50%; animation: pulse 8s infinite alternate; }
+        .glow2 { position: absolute; width: 500px; height: 500px; background: radial-gradient(circle, rgba(16,185,129,0.3) 0%, rgba(15,23,42,0) 70%); bottom: -150px; right: -100px; border-radius: 50%; animation: pulse 10s infinite alternate-reverse; }
+        @keyframes pulse { 0% { transform: scale(1); opacity: 0.6; } 100% { transform: scale(1.2); opacity: 1; } }
+        
+        .stars { position: absolute; top: 0; left: 0; right: 0; bottom: 0; background-image: radial-gradient(1.5px 1.5px at 20px 30px, #fff, rgba(0,0,0,0)), radial-gradient(2px 2px at 40px 70px, #fff, rgba(0,0,0,0)), radial-gradient(1.5px 1.5px at 50px 160px, #fff, rgba(0,0,0,0)), radial-gradient(2px 2px at 90px 40px, #fff, rgba(0,0,0,0)); background-repeat: repeat; background-size: 250px 250px; opacity: 0.5; animation: twinkle 5s infinite alternate; }
+        @keyframes twinkle { 0% { opacity: 0.2; } 100% { opacity: 0.7; } }
+        .moon { position: absolute; top: 10%; right: 15%; width: 100px; height: 100px; background: #fdf4dc; border-radius: 50%; box-shadow: 0 0 40px 10px rgba(253, 244, 220, 0.3); z-index: 1; }
+        .shooting-star { position: absolute; top: 0; left: -100px; width: 100px; height: 2px; background: linear-gradient(90deg, rgba(255,255,255,1), rgba(255,255,255,0)); animation: shoot 4s linear infinite; z-index: 2; opacity: 0; }
+        @keyframes shoot { 0% { transform: translateX(0) translateY(0) rotate(45deg); opacity: 1; } 20% { transform: translateX(600px) translateY(600px) rotate(45deg); opacity: 0; } 100% { transform: translateX(600px) translateY(600px) rotate(45deg); opacity: 0; } }
+        
+        .auth-box { position: relative; z-index: 10; background: rgba(30, 41, 59, 0.6); backdrop-filter: blur(20px); border: 1px solid rgba(255, 255, 255, 0.1); padding: 50px 40px; border-radius: 30px; text-align: center; color: #fff; width: 90%; max-width: 420px; box-shadow: 0 30px 60px rgba(0,0,0,0.4); }
+        .auth-box h2 { font-size: 2rem; margin-bottom: 30px; font-weight: 900; background: linear-gradient(to right, #a5b4fc, #818cf8); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        form { display: flex; flex-direction: column; gap: 20px; }
+        .input-group { position: relative; }
+        .input-group i { position: absolute; right: 20px; top: 50%; transform: translateY(-50%); color: #64748b; }
+        input { width: 100%; padding: 16px 50px 16px 20px; border-radius: 15px; border: 2px solid rgba(255,255,255,0.05); background: rgba(0,0,0,0.2); color: #fff; font-family: inherit; outline: none; transition: 0.3s; font-size: 1rem; }
+        input:focus { border-color: #818cf8; background: rgba(0,0,0,0.4); }
+        button { background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%); border: none; padding: 16px; border-radius: 15px; color: #fff; font-size: 1.1rem; font-weight: 800; cursor: pointer; transition: 0.3s; margin-top: 10px; font-family: inherit; }
+        button:hover { transform: translateY(-3px); box-shadow: 0 10px 20px rgba(79, 70, 229, 0.5); }
+        .msg { margin-top: 15px; font-size: 0.9rem; color: #f87171; font-weight: bold; }
+        @media (max-width: 480px) {
+            .auth-box { padding: 30px 20px; }
+            .auth-box h2 { font-size: 1.6rem; }
+            .moon { width: 60px; height: 60px; top: 5%; right: 5%; }
+            input { font-size: 16px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="glow"></div><div class="glow2"></div><div class="stars"></div><div class="moon"></div><div class="shooting-star"></div>
+    <div class="auth-box">
+        <h2>آریو مصلی‌نژاد</h2>
+        <form action="/login" method="POST">
+            <div class="input-group"><i class="fas fa-user"></i><input type="text" name="username" placeholder="نام کاربری" required></div>
+            <div class="input-group"><i class="fas fa-lock"></i><input type="password" name="password" placeholder="رمز عبور" required></div>
+            <button type="submit">ورود به سامانه</button>
+            {% if error %}<div class="msg">{{ error }}</div>{% endif %}
+        </form>
+    </div>
+</body>
+</html>
+"""
+# ==========================================
+# روت‌های ورود/خروج
+# ==========================================
 @app.route('/')
-def home(): return render_page('home_title', 'home_text', 'home_img', 'home')
+def index():
+    if 'username' in session: return redirect(url_for('home'))
+    return render_template_string(AUTH_HTML)
+
+@app.route('/login', methods=['POST'])
+def login():
+    user = request.form['username'].strip()
+    pw = request.form['password'].strip()
+    data = load_data()
+    
+    if user in data['users'] and data['users'][user]['password'] == pw:
+        session['username'] = user
+        session['role'] = data['users'][user]['role']
+        return redirect(url_for('home'))
+    return render_template_string(AUTH_HTML, error="نام کاربری یا رمز عبور اشتباه است.")
+
+@app.route('/logout')
+def logout():
+    session.clear()
+    return redirect(url_for('index'))
+
+# ==========================================
+# صفحات سایت
+# ==========================================
+@app.route('/home')
+def home():
+    if 'username' not in session: return redirect(url_for('index'))
+    data = load_data()
+    cards_html = "".join([f'<div class="card"><i class="fas {c.get("icon", "fa-star")}"></i><h3>{c["title"]}</h3><p>{c["text"]}</p></div>' for c in data['sections']['home']])
+    
+    content = f"""
+    <div class="container">
+        <h1 class="page-title" style="font-size: 2.5rem; margin-bottom: 20px;">{data['settings']['home_title']}</h1>
+        <div class="hero-card">
+            {data['settings']['home_subtitle']}
+        </div>
+        <div class="grid-cards">{cards_html}</div>
+    </div>
+    """
+    return render_template_string(BASE_TEMPLATE.replace("{% block content %}{% endblock %}", content).replace("{{ title }}", "خانه").replace("{{ active_page }}", "home"))
 
 @app.route('/about')
-def about(): return render_page('about_title', 'about_text', 'about_img', 'about')
+def about():
+    if 'username' not in session: return redirect(url_for('index'))
+    data = load_data()
+    content = f"""
+    <div class="container">
+        <h1 class="page-title">درباره مدرسه</h1>
+        <div class="hero-card" style="margin-bottom: 40px;">
+            {data['settings']['about_text']}
+        </div>
+        <div class="grid-cards">
+            <div class="card"><i class="fas fa-bullseye"></i><h3>اهداف ما</h3><p>تربیت نسل پویا، خلاق و متعهد برای ساختن آینده‌ای روشن‌تر.</p></div>
+            <div class="card"><i class="fas fa-history"></i><h3>تاریخچه مدرسه</h3><p>مدرسه ما با سال‌ها تجربه در زمینه آموزش و پرورش، همواره در تلاش بوده تا محیطی پویا و با نشاط برای دانش‌آموزان فراهم کند.</p></div>
+        </div>
+        <p style="text-align: center; margin-top: 40px; color: #64748b; line-height: 1.8;">مدرسه آریو مصلی‌نژاد با تکیه بر کادری مجرب و دلسوز، همواره در تلاش است تا محیطی امن، شاد و پویا برای رشد علمی و اخلاقی دانش‌آموزان فراهم کند. ما معتقدیم که هر دانش‌آموز می‌تواند با تلاش و پشتکار به قله‌های موفقیت دست یابد.</p>
+    </div>
+    """
+    return render_template_string(BASE_TEMPLATE.replace("{% block content %}{% endblock %}", content).replace("{{ title }}", "درباره ما").replace("{{ active_page }}", "about"))
 
 @app.route('/staff')
-def staff(): return render_page('staff_title', 'staff_text', 'staff_img', 'staff')
+def staff_page():
+    if 'username' not in session: return redirect(url_for('index'))
+    data = load_data()
+    cards_html = "".join([f'<div class="card"><i class="fas {c.get("icon", "fa-user")}"></i><h3>{c["title"]}</h3><p>{c["text"]}</p></div>' for c in data['sections']['staff']])
+    content = f"""
+    <div class="container">
+        <h1 class="page-title">کادر مدرسه</h1>
+        <div class="hero-card">کادری خلاق، پرانرژی و دلسوز که هر روز یک روز به یادماندنی برای دانش‌آموزان می‌سازند.</div>
+        <div class="grid-cards">{cards_html}</div>
+    </div>
+    """
+    return render_template_string(BASE_TEMPLATE.replace("{% block content %}{% endblock %}", content).replace("{{ title }}", "کادر مدرسه").replace("{{ active_page }}", "staff"))
 
 @app.route('/activities')
-def activities(): return render_page('act_title', 'act_text', 'act_img', 'act')
+def activities_page():
+    if 'username' not in session: return redirect(url_for('index'))
+    data = load_data()
+    cards_html = "".join([f'<div class="card"><i class="fas {c.get("icon", "fa-star")}"></i><h3>{c["title"]}</h3><p>{c["text"]}</p></div>' for c in data['sections']['activities']])
+    content = f"""
+    <div class="container">
+        <h1 class="page-title">فعالیت‌های آموزشی</h1>
+        <div class="hero-card">درس که تمام می‌شود، آریو تازه شروع می‌شود.</div>
+        <div class="grid-cards">{cards_html}</div>
+    </div>
+    """
+    return render_template_string(BASE_TEMPLATE.replace("{% block content %}{% endblock %}", content).replace("{{ title }}", "فعالیت‌ها").replace("{{ active_page }}", "activities"))
 
 @app.route('/news')
-def news(): return render_page('news_title', 'news_text', 'news_img', 'news')
+def news_page():
+    if 'username' not in session: return redirect(url_for('index'))
+    data = load_data()
+    cards_html = "".join([f'<div class="card"><i class="fas {c.get("icon", "fa-newspaper")}"></i><h3>{c["title"]}</h3><p>{c["text"]}</p></div>' for c in data['sections']['news']])
+    content = f"""
+    <div class="container">
+        <h1 class="page-title">اخبار مدرسه</h1>
+        <div class="hero-card">به‌زودی اخبار جدید مدرسه در این صفحه قرار می‌گیرد.</div>
+        <div class="grid-cards">{cards_html}</div>
+    </div>
+    """
+    return render_template_string(BASE_TEMPLATE.replace("{% block content %}{% endblock %}", content).replace("{{ title }}", "اخبار").replace("{{ active_page }}", "news"))
 
 @app.route('/contact')
 def contact():
-    title, text, img = get_content('contact_title'), get_content('contact_text'), get_content('contact_img')
-    img_html = f'<img src="/static/uploads/{img}" class="hero-img">' if img else ""
-    content = f'<div class="hero">{img_html}<h1>{title}</h1><p>{text}</p></div><div class="container"><div class="grid"><div class="card"><div class="card-icon">📞</div><h3>تلفن</h3><p dir="ltr" style="font-weight: bold; font-size: 20px;">{get_content("contact_phone")}</p></div><div class="card"><div class="card-icon">📍</div><h3>آدرس</h3><p>{get_content("contact_address_text")}</p><a href="{get_content("contact_address_link")}" target="_blank" class="btn" style="margin-top: 15px; font-size: 14px; padding: 10px 20px;">مشاهده در نقشه</a></div></div></div>'
-    return render_template_string(BASE_HTML, content=content)
-@app.route('/login', methods=['GET', 'POST'])
-def login():
-    if request.method == 'POST':
-        user = User.query.filter_by(email=request.form.get('email')).first()
-        if user and check_password_hash(user.password, request.form.get('password')):
-            login_user(user); return redirect(url_for('home'))
-        flash('ایمیل یا رمز اشتباه است.')
-    content = '<div style="max-width: 400px; margin: 50px auto; background: white; padding: 30px; border-radius: 15px; box-shadow: 0 10px 20px rgba(0,0,0,0.1);"><h2 style="text-align: center; color: #1e3a8a;">ورود</h2><form method="POST"><input type="email" name="email" placeholder="ایمیل" required><input type="password" name="password" placeholder="رمز عبور" required><button type="submit" class="btn" style="width: 100%;">ورود</button></form><p style="text-align: center; margin-top: 15px;">حساب ندارید؟ <a href="/register" style="color: #2563eb;">ثبت‌نام</a></p></div>'
-    return render_template_string(BASE_HTML, content=content)
-
-@app.route('/register', methods=['GET', 'POST'])
-def register():
-    if request.method == 'POST':
-        if User.query.filter_by(email=request.form.get('email')).first(): flash('این ایمیل ثبت شده است')
-        else:
-            new_user = User(email=request.form.get('email'), name=request.form.get('name'), password=generate_password_hash(request.form.get('password')))
-            db.session.add(new_user); db.session.commit()
-            flash('ثبت‌نام موفق!'); return redirect(url_for('login'))
-    content = '<div style="max-width: 400px; margin: 50px auto; background: white; padding: 30px; border-radius: 15px; box-shadow: 0 10px 20px rgba(0,0,0,0.1);"><h2 style="text-align: center; color: #1e3a8a;">ثبت‌نام</h2><form method="POST"><input type="text" name="name" placeholder="نام" required><input type="email" name="email" placeholder="ایمیل" required><input type="password" name="password" placeholder="رمز عبور" required><button type="submit" class="btn" style="width: 100%;">ثبت‌نام</button></form></div>'
-    return render_template_string(BASE_HTML, content=content)
-
-@app.route('/logout')
-@login_required
-def logout(): logout_user(); return redirect(url_for('home'))
-
-@app.route('/admin', methods=['GET', 'POST'])
-@login_required
-def admin():
-    if not current_user.is_admin: 
-        flash('عدم دسترسی')
-        return redirect(url_for('home'))
-    
-    if request.method == 'POST':
-        action = request.form.get('action')
-        if action == 'delete_card':
-            Card.query.filter_by(id=request.form.get('card_id')).delete()
-            db.session.commit()
-            flash('کادر حذف شد!')
-        elif action == 'add_card':
-            new_card = Card(page_name=request.form.get('card_page'), icon=request.form.get('card_icon'), title=request.form.get('card_title'), content=request.form.get('card_content'))
-            db.session.add(new_card)
-            db.session.commit()
-            flash('کادر جدید اضافه شد!')
-        else:
-            for key in request.form:
-                if key not in ['image_file', 'page_name', 'action']:
-                    entry = SiteContent.query.filter_by(key=key).first()
-                    if entry: entry.value = request.form.get(key)
-                    else: db.session.add(SiteContent(key=key, value=request.form.get(key)))
-            file = request.files.get('image_file')
-            page = request.form.get('page_name')
-            if file and file.filename != '' and page:
-                filename = secure_filename(file.filename)
-                file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
-                entry = SiteContent.query.filter_by(key=f"{page}_img").first()
-                if entry: entry.value = filename
-                else: db.session.add(SiteContent(key=f"{page}_img", value=filename))
-                db.session.commit()
-            flash('تغییرات متن‌ها ذخیره شد!')
-        return redirect(url_for('admin'))
-    
-    users_html = ""
-    for u in User.query.all():
-        role_text = "ادمین" if u.is_admin else "کاربر"
-        if u.email == 'admin@site.com': action_html = '<span>مدیر کل</span>'
-        else:
-            btn_color = "#ef4444" if u.is_admin else "#10b981"
-            btn_text = "حذف ادمینی" if u.is_admin else "ارتقا به ادمین"
-            action_html = f'<a href="/toggle_admin/{u.id}" class="btn" style="padding: 5px 10px; font-size: 12px; background: {btn_color};">{btn_text}</a>'
-        users_html += f'<tr><td>{u.name}</td><td>{u.email}</td><td>{role_text}</td><td>{action_html}</td></tr>'
-    
-    cards_html = ""
-    for c in Card.query.all():
-        cards_html += f'<tr><td>{c.page_name}</td><td>{c.icon} {c.title}</td><td><form method="POST" style="display:inline;"><input type="hidden" name="card_id" value="{c.id}"><button type="submit" name="action" value="delete_card" class="btn" style="background:#ef4444; padding:5px 10px; font-size:12px;">حذف</button></form></td></tr>'
-
-    content = f"""
-    <div style="background: white; padding: 30px; border-radius: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.08);">
-        <h2 style="color: #1e3a8a; text-align: center; margin-bottom: 30px;">پنل مدیریت پیشرفته</h2>
-        <div style="text-align: center; margin-bottom: 20px;">
-            <button type="button" class="btn tab-btn active" onclick="openTab('home', this)">خانه</button>
-            <button type="button" class="btn tab-btn" onclick="openTab('about', this)">درباره ما</button>
-            <button type="button" class="btn tab-btn" onclick="openTab('staff', this)">کادر</button>
-            <button type="button" class="btn tab-btn" onclick="openTab('act', this)">فعالیت‌ها</button>
-            <button type="button" class="btn tab-btn" onclick="openTab('news', this)">اخبار</button>
-            <button type="button" class="btn tab-btn" onclick="openTab('contact', this)">تماس</button>
-            <button type="button" class="btn tab-btn" onclick="openTab('users', this)">کاربران</button>
-            <button type="button" class="btn tab-btn" onclick="openTab('cards', this)">مدیریت کادرها</button>
+    if 'username' not in session: return redirect(url_for('index'))
+    content = """
+    <div class="container">
+        <h1 class="page-title">تماس با ما</h1>
+        <div class="hero-card">حرف داری؟ زنگ بزن یا سر بزن.</div>
+        <div class="grid-cards">
+            <div class="card"><i class="fas fa-map-marker-alt"></i><h3>آدرس</h3><p>ارومیه، محله بزرگباش، اول خیابان جان‌بازان</p><a href="https://maps.google.com/?q=Urmia+Bozorgbash+Janbazan" target="_blank" class="btn-map">مشاهده در نقشه</a></div>
+            <div class="card"><i class="fas fa-phone-alt"></i><h3>تلفن</h3><p>۰۴۴-۳۸۶۸۷۶۸۶</p></div>
         </div>
-        <form method="POST" enctype="multipart/form-data">
-            <input type="hidden" name="page_name" id="current_page" value="home">
-            <div id="tab-home" class="page-form active"><input type="text" name="home_title" value="{get_content('home_title')}"><textarea name="home_text" rows="3">{get_content('home_text')}</textarea><input type="file" name="image_file"></div>
-            <div id="tab-about" class="page-form" style="display:none;"><input type="text" name="about_title" value="{get_content('about_title')}"><textarea name="about_text" rows="3">{get_content('about_text')}</textarea><input type="file" name="image_file"></div>
-            <div id="tab-staff" class="page-form" style="display:none;"><input type="text" name="staff_title" value="{get_content('staff_title')}"><textarea name="staff_text" rows="2">{get_content('staff_text')}</textarea><input type="file" name="image_file"></div>
-            <div id="tab-act" class="page-form" style="display:none;"><input type="text" name="act_title" value="{get_content('act_title')}"><textarea name="act_text" rows="3">{get_content('act_text')}</textarea><input type="file" name="image_file"></div>
-            <div id="tab-news" class="page-form" style="display:none;"><input type="text" name="news_title" value="{get_content('news_title')}"><textarea name="news_text" rows="3">{get_content('news_text')}</textarea><input type="file" name="image_file"></div>
-            <div id="tab-contact" class="page-form" style="display:none;"><input type="text" name="contact_title" value="{get_content('contact_title')}"><textarea name="contact_text" rows="2">{get_content('contact_text')}</textarea><input type="text" name="contact_phone" value="{get_content('contact_phone')}" placeholder="تلفن"><input type="text" name="contact_address_text"
-            value="{get_content('contact_address_text')}" placeholder="آدرس"><input type="text" name="contact_address_link" value="{get_content('contact_address_link')}" placeholder="لینک نقشه"><input type="file" name="image_file"></div>
-            <div id="tab-users" class="page-form" style="display:none;"><table style="width: 100%; border-collapse: collapse; text-align: center;"><tr style="background: #f1f5f9;"><th>نام</th><th>ایمیل</th><th>نقش</th><th>عملیات</th></tr>{users_html}</table></div>
-            <div id="tab-cards" class="page-form" style="display:none;"><h3>کادرهای فعلی</h3><table style="width: 100%; border-collapse: collapse; text-align: center; margin-bottom: 20px;"><tr style="background: #f1f5f9;"><th>صفحه</th><th>عنوان</th><th>عملیات</th></tr>{cards_html}</table><hr style="border: 0; border-top: 1px dashed #cbd5e1; margin: 20px 0;"><h3 style="color: #10b981;">افزودن کادر جدید</h3><select name="card_page" style="padding:10px; margin-bottom:10px; border-radius:8px; width:100%;"><option value="home">خانه</option><option value="about">درباره ما</option><option value="staff">کادر مدرسه</option><option value="act">فعالیت‌ها</option><option value="news">اخبار</option></select><input type="text" name="card_icon" placeholder="آیکون (مثلا 📚)"><input type="text" name="card_title" placeholder="عنوان کادر"><textarea name="card_content" rows="2" placeholder="متن کادر"></textarea><button type="submit" name="action" value="add_card" class="btn" style="background: #10b981; width: 100%;">➕ افزودن کادر</button></div>
-            <button type="submit" name="action" value="save_content" class="btn" style="width: 100%; margin-top: 30px; background: #3b82f6;">💾 ذخیره تغییرات متن‌ها</button>
+    </div>
+    """
+    return render_template_string(BASE_TEMPLATE.replace("{% block content %}{% endblock %}", content).replace("{{ title }}", "تماس با ما").replace("{{ active_page }}", "contact"))
+# ==========================================
+# پنل مدیریت (کامل)
+# ==========================================
+ADMIN_HTML = BASE_TEMPLATE.replace("{% block content %}{% endblock %}", """
+<div class="container">
+    <h1 class="page-title">پنل مدیریت پیشرفته</h1>
+    <div class="hero-card" style="margin-bottom: 30px;">مدیریت تمام بخش‌های سایت بدون نیاز به کدنویسی</div>
+    
+    {% if msg %}<div style="background: #d1fae5; color: #065f46; padding: 15px; border-radius: 10px; margin-bottom: 20px; text-align: center; font-weight: bold;">{{ msg }}</div>{% endif %}
+
+    <!-- مدیریت کاربران -->
+    <div class="admin-section" style="border: 2px solid #3b82f6;">
+        <h3><i class="fas fa-users-cog"></i> مدیریت کاربران (ادمین‌ها و معلم‌ها)</h3>
+        <form action="/admin/add_user" method="POST" class="admin-form">
+            <input type="text" name="username" placeholder="نام کاربری جدید" required style="flex: 1;">
+            <input type="password" name="password" placeholder="رمز عبور" required style="flex: 1;">
+            <select name="role" style="flex: 1;">
+                <option value="مدیر سایت (شما)">مدیر سایت (شما)</option>
+                <option value="مدیر مدرسه">مدیر مدرسه</option>
+                <option value="معلم">معلم</option>
+                <option value="دانش‌آموز">دانش‌آموز</option>
+            </select>
+            <button type="submit" class="btn-success">افزودن کاربر</button>
+        </form>
+        
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 10px;">
+            {% for uname, uinfo in data.users.items() %}
+            <div class="admin-list-item" style="margin-bottom: 0;">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                    <i class="fas fa-user-circle" style="color: #3b82f6; font-size: 1.2rem;"></i>
+                    <div>
+                        <strong style="display: block;">{{ uname }}</strong>
+                        <span style="font-size: 0.8rem; color: #64748b;">{{ uinfo.role }}</span>
+                    </div>
+                </div>
+                {% if uname != 'admin' %}
+                <a href="/admin/delete_user/{{ uname }}" class="btn-danger" onclick="return confirm('مطمئنی می‌خوای این کاربر رو حذف کنی؟')">حذف</a>
+                {% else %}
+                <span style="font-size: 0.7rem; color: #10b981; font-weight: bold;">اصلی</span>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <!-- ویرایش متن‌های اصلی -->
+    <div class="admin-section">
+        <h3><i class="fas fa-edit"></i> ویرایش متن‌های اصلی</h3>
+        <form action="/admin/update_texts" method="POST">
+            <div class="form-group"><label>عنوان بزرگ صفحه خانه</label><input type="text" name="home_title" value="{{ data.settings.home_title }}" required></div>
+            <div class="form-group"><label>متن زیر عنوان صفحه خانه</label><textarea name="home_subtitle" rows="2" required>{{ data.settings.home_subtitle }}</textarea></div>
+            <div class="form-group"><label>متن صفحه درباره ما</label><textarea name="about_text" rows="3" required>{{ data.settings.about_text }}</textarea></div>
+            <button type="submit" class="btn-success"><i class="fas fa-save"></i> ذخیره متون</button>
         </form>
     </div>
-    <script>
-        function openTab(tabName, btn) {{
-            document.querySelectorAll('.page-form').forEach(el => el.style.display = 'none');
-            document.querySelectorAll('.tab-btn').forEach(el => {{ el.classList.remove('active'); el.style.background = '#cbd5e1'; el.style.color = '#334155'; }});
-            document.getElementById('tab-' + tabName).style.display = 'block';
-            btn.classList.add('active'); btn.style.background = '#3b82f6'; btn.style.color = 'white';
-            document.getElementById('current_page').value = tabName;
-        }}
-    </script>
-    """
-    return render_template_string(BASE_HTML, content=content)
 
-@app.route('/toggle_admin/<int:user_id>')
-@login_required
-def toggle_admin(user_id):
-    if not current_user.is_admin: return redirect(url_for('home'))
-    user = User.query.get_or_404(user_id)
-    if user.email != 'admin@site.com':
-        user.is_admin = not user.is_admin; db.session.commit(); flash(f'نقش {user.name} تغییر کرد.')
-    return redirect(url_for('admin'))
+    <!-- مدیریت کارت‌ها (اضافه کردن) -->
+    <div class="admin-section">
+        <h3><i class="fas fa-plus-circle"></i> افزودن کارت جدید به هر بخش</h3>
+        <form action="/admin/add_card" method="POST" class="admin-form">
+            <select name="section" style="flex: 1;">
+                <option value="home">صفحه خانه</option>
+                <option value="staff">کادر مدرسه</option>
+                <option value="activities">فعالیت‌ها</option>
+                <option value="news">اخبار</option>
+                </select>
+            <input type="text" name="title" placeholder="عنوان" required style="flex: 2;">
+            <input type="text" name="text" placeholder="توضیحات" required style="flex: 2;">
+            <select name="icon" style="flex: 1;">
+                <option value="fa-user-tie">مدیر</option>
+                <option value="fa-user-graduate">معاون</option>
+                <option value="fa-star">ستاره</option>
+                <option value="fa-laptop-code">کامپیوتر</option>
+                <option value="fa-book">کتاب</option>
+                <option value="fa-school">مدرسه</option>
+                <option value="fa-trophy">جام</option>
+            </select>
+            <button type="submit" class="btn-success">افزودن</button>
+        </form>
+    </div>
 
+    <!-- ویرایش کارت‌ها -->
+    {% if edit_card %}
+    <div class="admin-section" style="border: 2px solid #f59e0b;">
+        <h3 style="color: #d97706;"><i class="fas fa-edit"></i> در حال ویرایش کارت: {{ edit_card.title }}</h3>
+        <form action="/admin/edit_card/{{ edit_section }}/{{ edit_index }}" method="POST" class="admin-form">
+            <input type="text" name="title" value="{{ edit_card.title }}" required style="flex: 2;">
+            <input type="text" name="text" value="{{ edit_card.text }}" required style="flex: 3;">
+            <select name="icon" style="flex: 1;">
+                <option value="fa-user-tie" {% if edit_card.icon == 'fa-user-tie' %}selected{% endif %}>مدیر</option>
+                <option value="fa-user-graduate" {% if edit_card.icon == 'fa-user-graduate' %}selected{% endif %}>معاون</option>
+                <option value="fa-star" {% if edit_card.icon == 'fa-star' %}selected{% endif %}>ستاره</option>
+                <option value="fa-laptop-code" {% if edit_card.icon == 'fa-laptop-code' %}selected{% endif %}>کامپیوتر</option>
+                <option value="fa-book" {% if edit_card.icon == 'fa-book' %}selected{% endif %}>کتاب</option>
+                <option value="fa-school" {% if edit_card.icon == 'fa-school' %}selected{% endif %}>مدرسه</option>
+                <option value="fa-trophy" {% if edit_card.icon == 'fa-trophy' %}selected{% endif %}>جام</option>
+            </select>
+            <button type="submit" class="btn-success">ثبت ویرایش</button>
+            <a href="/admin" class="btn-danger" style="text-align: center; line-height: 2;">انصراف</a>
+        </form>
+    </div>
+    {% endif %}
+
+    <!-- لیست تمام کارت‌ها -->
+    <div class="admin-section">
+        <h3><i class="fas fa-list"></i> لیست تمام کارت‌ها</h3>
+        <h4 style="margin-top: 20px; color: #3b82f6;">صفحه خانه (Home)</h4>
+        {% for card in data.sections.home %}
+        <div class="admin-list-item">
+            <div style="display: flex; align-items: center; gap: 10px;"><i class="fas {{ card.icon }}"></i> <strong>{{ card.title }}</strong> - <span>{{ card.text }}</span></div>
+            <div style="display: flex; gap: 5px;"><a href="/admin?edit_section=home&edit_index={{ loop.index0 }}" class="btn-warning">ویرایش</a><a href="/admin/delete_card/home/{{ loop.index0 }}" class="btn-danger">حذف</a></div>
+        </div>
+        {% endfor %}
+        <h4 style="margin-top: 20px; color: #3b82f6;">کادر مدرسه (Staff)</h4>
+        {% for card in data.sections.staff %}
+        <div class="admin-list-item">
+            <div style="display: flex; align-items: center; gap: 10px;"><i class="fas {{ card.icon }}"></i> <strong>{{ card.title }}</strong> - <span>{{ card.text }}</span></div>
+            <div style="display: flex; gap: 5px;"><a href="/admin?edit_section=staff&edit_index={{ loop.index0 }}" class="btn-warning">ویرایش</a><a href="/admin/delete_card/staff/{{ loop.index0 }}" class="btn-danger">حذف</a></div>
+        </div>
+        {% endfor %}
+        <h4 style="margin-top: 20px; color: #3b82f6;">فعالیت‌ها (Activities)</h4>
+        {% for card in data.sections.activities %}
+        <div class="admin-list-item">
+            <div style="display: flex; align-items: center; gap: 10px;"><i class="fas {{ card.icon }}"></i> <strong>{{ card.title }}</strong> - <span>{{ card.text }}</span></div>
+            <div style="display: flex; gap: 5px;"><a href="/admin?edit_section=activities&edit_index={{ loop.index0 }}" class="btn-warning">ویرایش</a><a href="/admin/delete_card/activities/{{ loop.index0 }}" class="btn-danger">حذف</a></div>
+        </div>
+        {% endfor %}
+        <h4 style="margin-top: 20px; color: #3b82f6;">اخبار (News)</h4>
+        {% for card in data.sections.news %}
+        <div class="admin-list-item">
+            <div style="display: flex; align-items: center; gap: 10px;"><i class="fas {{ card.icon }}"></i> <strong>{{ card.title }}</strong> - <span>{{ card.text }}</span></div>
+            <div style="display: flex; gap: 5px;"><a href="/admin?edit_section=news&edit_index={{ loop.index0 }}" class="btn-warning">ویرایش</a><a href="/admin/delete_card/news/{{ loop.index0 }}" class="btn-danger">حذف</a></div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+""")
+# ==========================================
+# روت‌های پنل مدیریت
+# ==========================================
+@app.route('/admin')
+def admin():
+    if 'username' not in session or session.get('role') not in ["مدیر سایت (شما)", "مدیر مدرسه"]:
+        return "شما دسترسی به این بخش ندارید. <a href='/home'>بازگشت</a>"
+    
+    data = load_data()
+    msg = request.args.get('msg')
+    edit_section = request.args.get('edit_section')
+    edit_index = request.args.get('edit_index')
+    edit_card = None
+    
+    if edit_section and edit_index is not None:
+        try: edit_card = data['sections'][edit_section][int(edit_index)]
+        except: pass
+
+    return render_template_string(ADMIN_HTML, data=data, msg=msg, title="پنل ادمین", active_page="admin", edit_card=edit_card, edit_section=edit_section, edit_index=edit_index)
+
+@app.route('/admin/update_texts', methods=['POST'])
+def update_texts():
+    if session.get('role') not in ["مدیر سایت (شما)", "مدیر مدرسه"]: return redirect(url_for('home'))
+    data = load_data()
+    data['settings']['home_title'] = request.form['home_title']
+    data['settings']['home_subtitle'] = request.form['home_subtitle']
+    data['settings']['about_text'] = request.form['about_text']
+    save_data(data)
+    return redirect(url_for('admin', msg='متون با موفقیت ذخیره شد.'))
+
+@app.route('/admin/add_card', methods=['POST'])
+def add_card():
+    if session.get('role') not in ["مدیر سایت (شما)", "مدیر مدرسه"]: return redirect(url_for('home'))
+    data = load_data()
+    sec = request.form['section']
+    new_card = {"title": request.form['title'], "text": request.form['text'], "icon": request.form['icon']}
+    data['sections'][sec].append(new_card)
+    save_data(data)
+    return redirect(url_for('admin', msg='کارت جدید اضافه شد.'))
+
+@app.route('/admin/edit_card/<section>/<int:index>', methods=['POST'])
+def edit_card(section, index):
+    if session.get('role') not in ["مدیر سایت (شما)", "مدیر مدرسه"]: return redirect(url_for('home'))
+    data = load_data()
+    if 0 <= index < len(data['sections'][section]):
+        data['sections'][section][index]['title'] = request.form['title']
+        data['sections'][section][index]['text'] = request.form['text']
+        data['sections'][section][index]['icon'] = request.form['icon']
+        save_data(data)
+    return redirect(url_for('admin', msg='کارت با موفقیت ویرایش شد.'))
+
+@app.route('/admin/delete_card/<section>/<int:index>')
+def delete_card(section, index):
+    if session.get('role') not in ["مدیر سایت (شما)", "مدیر مدرسه"]: return redirect(url_for('home'))
+    data = load_data()
+    if 0 <= index < len(data['sections'][section]):
+        data['sections'][section].pop(index)
+        save_data(data)
+    return redirect(url_for('admin', msg='کارت حذف شد.'))
+
+@app.route('/admin/add_user', methods=['POST'])
+def add_user():
+    if session.get('role') not in ["مدیر سایت (شما)", "مدیر مدرسه"]: return redirect(url_for('home'))
+    data = load_data()
+    uname = request.form['username'].strip()
+    if uname in data['users']:
+        return redirect(url_for('admin', msg='این نام کاربری از قبل وجود دارد!'))
+    
+    data['users'][uname] = {"password": request.form['password'], "role": request.form['role']}
+    save_data(data)
+    return redirect(url_for('admin', msg='کاربر جدید با موفقیت اضافه شد.'))
+
+@app.route('/admin/delete_user/<username>')
+def delete_user(username):
+    if session.get('role') not in ["مدیر سایت (شما)", "مدیر مدرسه"]: return redirect(url_for('home'))
+    if username == 'admin':
+        return redirect(url_for('admin', msg='شما نمی‌توانید کاربر اصلی (admin) را حذف کنید!'))
+    
+    data = load_data()
+    if username in data['users']:
+        del data['users'][username]
+        save_data(data)
+    return redirect(url_for('admin', msg='کاربر حذف شد.'))
+
+# ==========================================
+# اجرای برنامه (مخصوص رندر و لوکال)
+# ==========================================
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)
