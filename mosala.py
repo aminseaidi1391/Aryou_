@@ -46,7 +46,7 @@ def load_data():
             ],
             "staff": [
                 {"title": "جناب آقای سلاطین", "text": "مدیر مدرسه", "icon": "fa-user-tie"},
-                {"title": "جناب آقای الوالی", "text": "معاون آموزشی", "icon": "fa-user-graduate"}
+                {"title": "جناب آقای الوانی", "text": "معاون آموزشی", "icon": "fa-user-graduate"}
             ],
             "activities": [
                 {"title": "گروه هنری و تئاتر", "text": "اجرای نمایش‌های زیبا در مناسبت‌های مختلف.", "icon": "fa-theater-masks"},
