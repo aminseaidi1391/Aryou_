@@ -302,13 +302,22 @@ def login():
         return redirect(url_for('home'))
     return render_template_string(AUTH_HTML, error="نام کاربری یا رمز عبور اشتباه است.")
 
-@app.route('/register', methods=['GET', 'POST'])
+@app.route('/register', methods=['POST'])
 def register():
-    if request.method == 'POST':
-        # منطق ثبت‌نام
-        pass
-    # این خط صفحه ثبت‌نام را نمایش می‌دهد (اگر از تمپلیت استفاده می‌کنید)
-    return render_template_string(AUTH_HTML)
+    user = request.form['username'].strip()
+    pw = request.form['password'].strip()
+    data = load_data()
+    
+    # چک کردن اینکه کاربر قبلا ساخته نشده باشه
+    if user in data['users']:
+        return render_template_string(AUTH_HTML, error="این نام کاربری قبلا وجود دارد!")
+    
+    # ذخیره کاربر جدید در دیتابیس
+    data['users'][user] = {"password": pw, "role": "دانش‌آموز"}
+    save_data(data)
+    
+    # پیام موفقیت
+    return render_template_string(AUTH_HTML, success="ثبت‌نام موفق! حالا با همین اطلاعات وارد شوید.")
 
 @app.route('/logout')
 def logout():
