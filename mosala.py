@@ -200,18 +200,37 @@ BASE_TEMPLATE = """
 </body>
 </html>
 """
+# ==========================================
+# صفحه ورود لاکچری (تیره، ماه و ستاره - کاملاً بهینه برای موبایل)
+# ==========================================
 AUTH_HTML = """
 <!DOCTYPE html>
 <html lang="fa" dir="rtl">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>ورود | مدرسه آریو مصلی‌نژاد</title>
     <link href="https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/Vazirmatn-font-face.css" rel="stylesheet" type="text/css" />
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Vazirmatn', sans-serif; }
-        body { background: #0f172a; height: 100vh; display: flex; justify-content: center; align-items: center; overflow: hidden; position: relative; }
+        
+        body { 
+            background: #0f172a; 
+            min-height: 100vh; 
+            min-height: 100dvh; /* مخصوص گوشی */
+            display: flex; 
+            justify-content: center; 
+            align-items: center; 
+            position: relative; 
+            /* اجازه اسکرول در صورت باز شدن کیبورد */
+            overflow-x: hidden; 
+            overflow-y: auto; 
+            padding: 20px;
+        }
+        
+        /* افکت‌های پس‌زمینه (غیرفعال کردن کلیک برای اینکه مزاحم فرم نشن) */
+        .glow, .glow2, .stars, .moon, .shooting-star { pointer-events: none; }
         
         .glow { position: absolute; width: 600px; height: 600px; background: radial-gradient(circle, rgba(79,70,229,0.4) 0%, rgba(15,23,42,0) 70%); top: -200px; left: -200px; border-radius: 50%; animation: pulse 8s infinite alternate; }
         .glow2 { position: absolute; width: 500px; height: 500px; background: radial-gradient(circle, rgba(16,185,129,0.3) 0%, rgba(15,23,42,0) 70%); bottom: -150px; right: -100px; border-radius: 50%; animation: pulse 10s infinite alternate-reverse; }
@@ -219,35 +238,84 @@ AUTH_HTML = """
         
         .stars { position: absolute; top: 0; left: 0; right: 0; bottom: 0; background-image: radial-gradient(1.5px 1.5px at 20px 30px, #fff, rgba(0,0,0,0)), radial-gradient(2px 2px at 40px 70px, #fff, rgba(0,0,0,0)), radial-gradient(1.5px 1.5px at 50px 160px, #fff, rgba(0,0,0,0)), radial-gradient(2px 2px at 90px 40px, #fff, rgba(0,0,0,0)); background-repeat: repeat; background-size: 250px 250px; opacity: 0.5; animation: twinkle 5s infinite alternate; }
         @keyframes twinkle { 0% { opacity: 0.2; } 100% { opacity: 0.7; } }
-        .moon { position: absolute; top: 10%; right: 15%; width: 100px; height: 100px; background: #fdf4dc; border-radius: 50%; box-shadow: 0 0 40px 10px rgba(253, 244, 220, 0.3); z-index: 1; }
+        
+        /* اصلاح جایگاه ماه برای گوشی */
+        .moon { position: absolute; top: 8%; right: 10%; width: 80px; height: 80px; background: #fdf4dc; border-radius: 50%; box-shadow: 0 0 40px 10px rgba(253, 244, 220, 0.3); z-index: 1; }
         .shooting-star { position: absolute; top: 0; left: -100px; width: 100px; height: 2px; background: linear-gradient(90deg, rgba(255,255,255,1), rgba(255,255,255,0)); animation: shoot 4s linear infinite; z-index: 2; opacity: 0; }
         @keyframes shoot { 0% { transform: translateX(0) translateY(0) rotate(45deg); opacity: 1; } 20% { transform: translateX(600px) translateY(600px) rotate(45deg); opacity: 0; } 100% { transform: translateX(600px) translateY(600px) rotate(45deg); opacity: 0; } }
         
-        .auth-box { position: relative; z-index: 10; background: rgba(30, 41, 59, 0.6); backdrop-filter: blur(20px); border: 1px solid rgba(255, 255, 255, 0.1); padding: 50px 40px; border-radius: 30px; text-align: center; color: #fff; width: 90%; max-width: 420px; box-shadow: 0 30px 60px rgba(0,0,0,0.4); }
-        .auth-box h2 { font-size: 2rem; margin-bottom: 30px; font-weight: 900; background: linear-gradient(to right, #a5b4fc, #818cf8); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-        form { display: flex; flex-direction: column; gap: 20px; }
-        .input-group { position: relative; }
-        .input-group i { position: absolute; right: 20px; top: 50%; transform: translateY(-50%); color: #64748b; }
-        input { width: 100%; padding: 16px 50px 16px 20px; border-radius: 15px; border: 2px solid rgba(255,255,255,0.05); background: rgba(0,0,0,0.2); color: #fff; font-family: inherit; outline: none; transition: 0.3s; font-size: 1rem; }
-        input:focus { border-color: #818cf8; background: rgba(0,0,0,0.4); }
-        button { background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%); border: none; padding: 16px; border-radius: 15px; color: #fff; font-size: 1.1rem; font-weight: 800; cursor: pointer; transition: 0.3s; margin-top: 10px; font-family: inherit; }
-        button:hover { transform: translateY(-3px); box-shadow: 0 10px 20px rgba(79, 70, 229, 0.5); }
-        .msg { margin-top: 15px; font-size: 0.9rem; color: #f87171; font-weight: bold; }
-        @media (max-width: 480px) {
-            .auth-box { padding: 30px 20px; }
-            .auth-box h2 { font-size: 1.6rem; }
-            .moon { width: 60px; height: 60px; top: 5%; right: 5%; }
-            input { font-size: 16px; }
+        /* کادر ورود */
+        .auth-box { 
+            position: relative; 
+            z-index: 10; 
+            background: rgba(30, 41, 59, 0.7); 
+            backdrop-filter: blur(20px); 
+            -webkit-backdrop-filter: blur(20px); /* برای سافاری */
+            border: 1px solid rgba(255, 255, 255, 0.1); 
+            padding: 40px 30px; 
+            border-radius: 30px; 
+            text-align: center; 
+            color: #fff; 
+            width: 100%; 
+            max-width: 400px; 
+            box-shadow: 0 30px 60px rgba(0,0,0,0.4);
+            margin: auto; /* برای وسط‌چین شدن دقیق */
         }
+        
+        .auth-box h2 { font-size: 1.8rem; margin-bottom: 30px; font-weight: 900; background: linear-gradient(to right, #a5b4fc, #818cf8); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        
+        form { display: flex; flex-direction: column; gap: 15px; }
+        
+        .input-group { position: relative; }
+        .input-group i { position: absolute; right: 15px; top: 50%; transform: translateY(-50%); color: #64748b; font-size: 1.1rem; }
+        
+        /* اینپوت‌ها (جلوگیری از زوم سافاری) */
+        input { 
+            width: 100%; 
+            padding: 14px 45px 14px 15px; 
+            border-radius: 12px; 
+            border: 2px solid rgba(255,255,255,0.05); 
+            background: rgba(0,0,0,0.3); 
+            color: #fff; 
+            font-family: inherit; 
+            outline: none; 
+            transition: 0.3s; 
+            font-size: 16px; 
+        }
+        input:focus { border-color: #818cf8; background: rgba(0,0,0,0.5); box-shadow: 0 0 0 3px rgba(129, 140, 248, 0.2); }
+        
+        button { 
+            background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%); 
+            border: none; 
+            padding: 15px; 
+            border-radius: 12px; 
+            color: #fff; 
+            font-size: 1.1rem; 
+            font-weight: 800; 
+            cursor: pointer; 
+            transition: 0.3s; 
+            margin-top: 10px; 
+            font-family: inherit; 
+        }
+        button:hover { transform: translateY(-2px); box-shadow: 0 10px 20px rgba(79, 70, 229, 0.4); }
+        
+        .msg { margin-top: 15px; font-size: 0.9rem; color: #f87171; font-weight: bold; }
     </style>
 </head>
 <body>
     <div class="glow"></div><div class="glow2"></div><div class="stars"></div><div class="moon"></div><div class="shooting-star"></div>
+    
     <div class="auth-box">
         <h2>آریو مصلی‌نژاد</h2>
         <form action="/login" method="POST">
-            <div class="input-group"><i class="fas fa-user"></i><input type="text" name="username" placeholder="نام کاربری" required></div>
-            <div class="input-group"><i class="fas fa-lock"></i><input type="password" name="password" placeholder="رمز عبور" required></div>
+            <div class="input-group">
+                <i class="fas fa-user"></i>
+                <input type="text" name="username" placeholder="نام کاربری" required>
+            </div>
+            <div class="input-group">
+                <i class="fas fa-lock"></i>
+                <input type="password" name="password" placeholder="رمز عبور" required>
+            </div>
             <button type="submit">ورود به سامانه</button>
             {% if error %}<div class="msg">{{ error }}</div>{% endif %}
         </form>
