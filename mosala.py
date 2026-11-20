@@ -1,5 +1,8 @@
 import json
 import os
+import tempfile
+from datetime import datetime
+from urllib.parse import urlparse
 from flask import Flask, render_template_string, request, redirect, url_for, session, abort
 from werkzeug.security import generate_password_hash, check_password_hash
 from markupsafe import escape
@@ -74,8 +77,25 @@ def load_data():
     return default_data
 
 def save_data(data):
-    with open(DATA_FILE, 'w', encoding='utf-8') as f:
-        json.dump(data, f, ensure_ascii=False, indent=4)
+    """Persist site content on disk using an atomic replace to avoid partial files."""
+    os.makedirs(BASE_DIR, exist_ok=True)
+    fd, temp_path = tempfile.mkstemp(prefix='school_data_', suffix='.tmp', dir=BASE_DIR)
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=4)
+            f.flush()
+            os.fsync(f.fileno())
+        # Keep the previous valid data as a recovery copy.
+        if os.path.exists(DATA_FILE):
+            backup_path = DATA_FILE + '.bak'
+            with open(DATA_FILE, 'rb') as src, open(backup_path, 'wb') as dst:
+                dst.write(src.read())
+                dst.flush()
+                os.fsync(dst.fileno())
+        os.replace(temp_path, DATA_FILE)
+    finally:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
         # ==========================================
 # قالب پایه (تم روشن + ریسپانسیو + افکت شیشه‌ای)
 # ==========================================
@@ -882,11 +902,21 @@ def activities_page():
 def news_page():
     if 'username' not in session: return redirect(url_for('index'))
     data = load_data()
-    cards_html = "".join([f'<div class="card"><i class="fas {safe_html(c.get("icon", "fa-newspaper"))}"></i><h3>{safe_html(c.get("title", ""))}</h3><p>{safe_html(c.get("text", ""))}</p></div>' for c in data['sections']['news']])
+    news_cards = []
+    for item in reversed(data['sections']['news']):
+        image_url = str(item.get('image_url', '')).strip()
+        parsed = urlparse(image_url)
+        image_html = (f'<img src="{safe_html(image_url)}" alt="{safe_html(item.get("title", "خبر مدرسه"))}" '
+                      'style="width:100%;max-height:230px;object-fit:cover;border-radius:16px;margin-bottom:14px;">') if parsed.scheme in ('http', 'https') and parsed.netloc else ''
+        date_html = f'<small style="display:block;color:#64748b;margin:0 0 10px">{safe_html(item.get("date", ""))}</small>' if item.get('date') else ''
+        news_cards.append(f'<article class="card">{image_html}<i class="fas {safe_html(item.get("icon", "fa-newspaper"))}"></i><h3>{safe_html(item.get("title", ""))}</h3>{date_html}<p>{safe_html(item.get("text", ""))}</p></article>')
+    cards_html = ''.join(news_cards)
+    empty_html = '<div class="hero-card">هنوز خبری ثبت نشده است. خبرهای تازه مدرسه به‌زودی در همین صفحه منتشر می‌شوند.</div>' if not cards_html else ''
     content = f"""
     <div class="container">
         <h1 class="page-title">اخبار مدرسه</h1>
-        <div class="hero-card">به‌زودی اخبار جدید مدرسه در این صفحه قرار می‌گیرد.</div>
+        <div class="hero-card">تازه‌ترین خبرها و رویدادهای مدرسه آریو مصلی‌نژاد</div>
+        {empty_html}
         <div class="grid-cards">{cards_html}</div>
     </div>
     """
@@ -959,6 +989,19 @@ ADMIN_HTML = BASE_TEMPLATE.replace("{% block content %}{% endblock %}", """
             <div class="form-group"><label>متن زیر عنوان صفحه خانه</label><textarea name="home_subtitle" rows="2" required>{{ data.settings.home_subtitle }}</textarea></div>
             <div class="form-group"><label>متن صفحه درباره ما</label><textarea name="about_text" rows="3" required>{{ data.settings.about_text }}</textarea></div>
             <button type="submit" class="btn-success"><i class="fas fa-save"></i> ذخیره متون</button>
+        </form>
+    </div>
+
+    <!-- انتشار خبر مستقل -->
+    <div class="admin-section">
+        <h3><i class="fas fa-newspaper"></i> انتشار خبر جدید</h3>
+        <p style="color:#64748b;margin:8px 0 16px">خبر پس از ذخیره در صفحه «اخبار» نمایش داده می‌شود و با خروج از حساب حذف نخواهد شد.</p>
+        <form action="/admin/add_news" method="POST" class="admin-form">
+            <input type="text" name="title" placeholder="عنوان خبر" required maxlength="160" style="flex:2;min-width:220px">
+            <input type="text" name="date" placeholder="تاریخ خبر (اختیاری؛ مثلاً ۱۴۰۵/۰۸/۲۹)" style="flex:1;min-width:190px">
+            <input type="url" name="image_url" placeholder="لینک تصویر خبر (اختیاری)" style="flex:2;min-width:220px">
+            <textarea name="text" placeholder="متن کامل خبر را بنویسید..." rows="4" required maxlength="10000" style="flex:1 1 100%;width:100%"></textarea>
+            <button type="submit" class="btn-success"><i class="fas fa-save"></i> ذخیره و انتشار خبر</button>
         </form>
     </div>
 
@@ -1072,6 +1115,28 @@ def update_texts():
     data['settings']['about_text'] = request.form['about_text']
     save_data(data)
     return redirect(url_for('admin', msg='متون با موفقیت ذخیره شد.'))
+
+@app.route('/admin/add_news', methods=['POST'])
+def add_news():
+    if session.get('role') not in ["مدیر سایت (شما)", "مدیر مدرسه"]:
+        return redirect(url_for('home'))
+    title = request.form.get('title', '').strip()
+    body = request.form.get('text', '').strip()
+    image_url = request.form.get('image_url', '').strip()
+    date = request.form.get('date', '').strip() or datetime.now().strftime('%Y-%m-%d')
+    parsed = urlparse(image_url) if image_url else None
+    if not title or not body:
+        return redirect(url_for('admin', msg='عنوان و متن خبر را وارد کنید.'))
+    if image_url and (parsed.scheme not in ('http', 'https') or not parsed.netloc):
+        return redirect(url_for('admin', msg='لینک تصویر معتبر نیست.'))
+    data = load_data()
+    data['sections'].setdefault('news', []).append({
+        'title': title, 'text': body, 'icon': 'fa-newspaper',
+        'date': date, 'image_url': image_url
+    })
+    save_data(data)
+    return redirect(url_for('admin', msg='خبر با موفقیت ذخیره و منتشر شد.'))
+
 
 @app.route('/admin/add_card', methods=['POST'])
 def add_card():
