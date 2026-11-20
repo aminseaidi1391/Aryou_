@@ -2533,6 +2533,189 @@ html[lang="en"] .login-topbar-actions { margin-left:auto; }
         html[lang="ar"] body,html[lang="ar"] body *{font-family:Tahoma,"Noto Sans Arabic",Arial,sans-serif}
         html[lang="ar"] .topbar,html[lang="ar"] .page,html[lang="ar"] .intro,html[lang="ar"] .auth-card{direction:rtl;text-align:right}
         @media(max-width:600px){.ario-language-switch button{min-width:36px;padding:7px 9px}}
+
+
+/* ARIO LOGIN: dedicated compact mobile layout.
+   Desktop/tablet-wide styling remains unchanged. */
+@media screen and (max-width:760px) {
+  html, body {
+    width:100% !important;
+    min-width:0 !important;
+    overflow-x:hidden !important;
+  }
+  body {
+    min-height:100vh !important;
+    min-height:100dvh !important;
+  }
+  .topbar.login-topbar {
+    width:calc(100% - 20px) !important;
+    max-width:500px !important;
+    min-height:0 !important;
+    margin:10px auto 0 !important;
+    padding:9px 10px !important;
+    border-radius:17px !important;
+    gap:7px !important;
+    flex-wrap:wrap !important;
+    justify-content:center !important;
+  }
+  .login-topbar .topbar-caption {
+    width:100% !important;
+    justify-content:center !important;
+    text-align:center !important;
+    font-size:.66rem !important;
+    line-height:1.5 !important;
+  }
+  .login-topbar-actions {
+    width:100% !important;
+    justify-content:center !important;
+    gap:8px !important;
+    flex-wrap:wrap !important;
+    min-width:0 !important;
+  }
+  .login-topbar-actions .theme-toggle {
+    min-height:39px !important;
+    padding:5px 10px !important;
+    gap:7px !important;
+    font-size:.72rem !important;
+  }
+  .login-topbar-actions .ario-language-picker {
+    flex:0 0 auto !important;
+  }
+  .login-topbar-actions .ario-language-trigger {
+    min-width:94px !important;
+    min-height:39px !important;
+    padding:0 11px !important;
+    font-size:.76rem !important;
+  }
+
+  .page {
+    display:grid !important;
+    grid-template-columns:minmax(0,1fr) !important;
+    grid-template-rows:auto auto !important;
+    align-items:start !important;
+    gap:15px !important;
+    width:calc(100% - 24px) !important;
+    max-width:510px !important;
+    min-height:0 !important;
+    height:auto !important;
+    margin:0 auto !important;
+    padding:13px 0 24px !important;
+  }
+  /* Put the usable login form first on a phone. */
+  .page > .auth-wrap {
+    order:-1 !important;
+    grid-row:1 !important;
+    width:100% !important;
+    max-width:none !important;
+    min-width:0 !important;
+    justify-self:stretch !important;
+    margin:0 !important;
+    animation:none !important;
+    transform:none !important;
+  }
+  .auth-card {
+    width:100% !important;
+    min-width:0 !important;
+    padding:clamp(16px,4.8vw,23px) !important;
+    border-radius:22px !important;
+    overflow:hidden !important;
+  }
+  .card-heading { margin-bottom:14px !important; }
+  .card-logo { margin-bottom:12px !important; gap:9px !important; }
+  .card-logo .brand-mark {
+    width:37px !important;
+    height:37px !important;
+    border-radius:12px !important;
+    font-size:18px !important;
+  }
+  .card-logo span { font-size:.75rem !important; }
+  .card-heading h2 {
+    font-size:clamp(1.2rem,5vw,1.46rem) !important;
+    line-height:1.45 !important;
+    margin-bottom:5px !important;
+  }
+  .card-heading p { font-size:.77rem !important; line-height:1.8 !important; }
+  .tabs { margin-bottom:14px !important; padding:4px !important; gap:4px !important; }
+  .tab { padding:10px 6px !important; font-size:.81rem !important; }
+  .auth-form { gap:10px !important; }
+  .field-label { font-size:.75rem !important; margin:0 2px -5px !important; }
+  .input-shell input {
+    height:48px !important;
+    border-radius:12px !important;
+    font-size:.84rem !important;
+  }
+  .submit-btn { height:49px !important; margin-top:3px !important; font-size:.87rem !important; }
+  .secure-note { margin-top:13px !important; font-size:.67rem !important; }
+  .bottom-note { margin-top:10px !important; font-size:.63rem !important; line-height:1.8 !important; }
+
+  .page > .intro {
+    order:0 !important;
+    grid-row:2 !important;
+    width:100% !important;
+    max-width:none !important;
+    min-width:0 !important;
+    margin:0 !important;
+    padding:9px 8px 0 !important;
+    text-align:center !important;
+    animation:none !important;
+    transform:none !important;
+  }
+  .intro:before {
+    inset:0 -4px !important;
+    border-radius:19px !important;
+  }
+  .intro .eyebrow {
+    font-size:.64rem !important;
+    padding:6px 10px !important;
+    gap:7px !important;
+  }
+  .intro h1 {
+    font-size:clamp(1.55rem,7vw,2.08rem) !important;
+    line-height:1.42 !important;
+    letter-spacing:-.5px !important;
+    margin:10px 0 7px !important;
+  }
+  .intro-copy {
+    max-width:42ch !important;
+    margin-inline:auto !important;
+    font-size:.78rem !important;
+    line-height:1.85 !important;
+  }
+  .feature-row {
+    margin-top:12px !important;
+    gap:6px !important;
+    justify-content:center !important;
+  }
+  .feature {
+    padding:7px 9px !important;
+    border-radius:10px !important;
+    gap:6px !important;
+    font-size:.65rem !important;
+  }
+  .feature i { font-size:.78rem !important; }
+  /* This decorative card is useful on desktop but makes the mobile login unnecessarily long. */
+  .visual-card { display:none !important; }
+}
+
+@media screen and (max-width:380px) {
+  .page { width:calc(100% - 20px) !important; gap:12px !important; }
+  .auth-card { padding:16px 14px !important; }
+  .card-heading h2 { font-size:1.18rem !important; }
+  .feature-row { gap:5px !important; }
+  .feature { padding:6px 7px !important; font-size:.61rem !important; }
+}
+
+@media screen and (max-width:760px) and (max-height:680px) {
+  .page { padding-top:9px !important; gap:10px !important; }
+  .auth-card { padding-top:15px !important; padding-bottom:15px !important; }
+  .card-heading { margin-bottom:10px !important; }
+  .tabs { margin-bottom:10px !important; }
+  .auth-form { gap:8px !important; }
+  .input-shell input { height:45px !important; }
+  .submit-btn { height:46px !important; }
+  .page > .intro { padding-top:5px !important; }
+}
+
 </style>
     <script>
         function switchTab(tabId) {
@@ -3775,7 +3958,7 @@ def contact():
           <h3>آدرس مدرسه</h3>
           <p class="contact-address-line">
             <i class="fas fa-map-pin" aria-hidden="true"></i>
-            <span>ارومیه، فلکه بازارباش، محله بزرگباش، ابتدای خیابان جانبازان</span>
+            <span>ارومیه، محله بازارباش، ابتدای خیابان جانبازان</span>
           </p>
           <div class="contact-actions">
             <a class="contact-action primary" id="arioNeshanMap"
@@ -3909,7 +4092,7 @@ def contact():
 # پنل مدیریت (کامل)
 # ==========================================
 ADMIN_HTML = BASE_TEMPLATE.replace("{% block content %}{% endblock %}", """
-<div class="container">
+<div class="container ario-admin-page">
     <h1 class="page-title">پنل مدیریت پیشرفته</h1>
     <div class="hero-card" style="margin-bottom:22px;">مدیریت تمام بخش‌های سایت بدون نیاز به کدنویسی</div>
 
@@ -4234,6 +4417,132 @@ ADMIN_HTML = BASE_TEMPLATE.replace("{% block content %}{% endblock %}", """
         </div>
         {% endfor %}
     </div>
+    <style id="ario-admin-consistent-theme">
+      /* All administration cards share the same school navy/blue visual system. */
+      .ario-admin-page { width:min(1320px,calc(100% - 44px)) !important; max-width:1320px !important; }
+      .ario-admin-page > .page-title { color:#f1f6ff !important; }
+      .ario-admin-page > .hero-card {
+        width:100% !important; max-width:none !important; margin:0 0 20px !important;
+        color:#c5d5eb !important;
+        background:linear-gradient(145deg,#17385f,#102b4c) !important;
+        border:1px solid rgba(155,190,235,.2) !important;
+        border-radius:23px !important; box-shadow:0 18px 44px rgba(0,0,0,.16) !important;
+      }
+      .ario-admin-page .admin-section,
+      .ario-admin-page .ario-live-users,
+      .ario-admin-page .ario-user-management {
+        color:#eaf2ff !important;
+        background:linear-gradient(145deg,#142f52 0%,#0c2442 100%) !important;
+        border:1px solid rgba(145,181,229,.22) !important;
+        border-radius:23px !important;
+        box-shadow:0 17px 42px rgba(0,0,0,.17) !important;
+        padding:clamp(19px,2.5vw,29px) !important;
+      }
+      .ario-admin-page .admin-section h3,
+      .ario-admin-page .ario-live-users h3,
+      .ario-admin-page .ario-user-management h3 {
+        color:#eaf3ff !important;
+        border-color:rgba(166,196,235,.18) !important;
+      }
+      .ario-admin-page .admin-section h4 { color:#a9c8f5 !important; }
+      .ario-admin-page .admin-section p { color:#b9cbe2; }
+      .ario-admin-page .admin-kpi-grid {
+        display:grid !important;
+        grid-template-columns:repeat(4,minmax(0,1fr)) !important;
+        gap:13px !important; margin:0 0 22px !important;
+      }
+      .ario-admin-page .admin-kpi-grid article {
+        min-width:0 !important; padding:19px 17px !important;
+        border-radius:18px !important; color:#e9f2ff !important;
+        border:1px solid rgba(145,181,229,.2) !important;
+        background:linear-gradient(145deg,#17385f,#102847) !important;
+        box-shadow:0 12px 28px rgba(0,0,0,.13) !important;
+      }
+      .ario-admin-page .admin-kpi-grid article span { color:#b8cce5 !important; }
+      .ario-admin-page .admin-kpi-grid article strong { display:block; color:#f4f8ff !important; font-size:1.7rem; margin:5px 0; }
+      .ario-admin-page .admin-kpi-grid article small { color:#9fb6d4 !important; }
+      .ario-admin-page .admin-section .admin-list-item {
+        color:#e5efff !important; background:rgba(255,255,255,.045) !important;
+        border-color:rgba(156,188,230,.16) !important;
+      }
+      .ario-admin-page .admin-section .admin-list-item span { color:#b6c9e2 !important; }
+      .ario-admin-page .admin-section input,
+      .ario-admin-page .admin-section textarea,
+      .ario-admin-page .admin-section select {
+        color:#eff6ff !important; background:rgba(4,17,34,.58) !important;
+        border:1px solid rgba(162,191,231,.22) !important;
+      }
+      .ario-admin-page .admin-section input::placeholder,
+      .ario-admin-page .admin-section textarea::placeholder { color:#94a9c5 !important; opacity:1; }
+      .ario-admin-page .ario-user-management .user-card,
+      .ario-admin-page .ario-user-management .users-summary,
+      .ario-admin-page .ario-user-management .user-create-form,
+      .ario-admin-page .ario-live-users .live-metric,
+      .ario-admin-page .ario-live-users .live-table-wrap {
+        background:rgba(255,255,255,.045) !important;
+        border-color:rgba(156,188,230,.17) !important;
+      }
+      .ario-admin-page .ario-user-management .user-identity strong,
+      .ario-admin-page .ario-live-users .online-user-name { color:#f4f8ff !important; }
+      .ario-admin-page .ario-user-management .user-role,
+      .ario-admin-page .ario-user-management .users-intro,
+      .ario-admin-page .ario-live-users .live-subtitle { color:#b8cbe2 !important; }
+      @media(max-width:900px) {
+        .ario-admin-page .admin-kpi-grid { grid-template-columns:repeat(2,minmax(0,1fr)) !important; }
+      }
+      @media(max-width:600px) {
+        .ario-admin-page { width:calc(100% - 24px) !important; }
+        .ario-admin-page .admin-kpi-grid { grid-template-columns:repeat(2,minmax(0,1fr)) !important; gap:9px !important; }
+        .ario-admin-page .admin-kpi-grid article { padding:14px 12px !important; }
+        .ario-admin-page .admin-section,
+        .ario-admin-page .ario-live-users,
+        .ario-admin-page .ario-user-management { padding:17px 14px !important; border-radius:18px !important; }
+      }
+      body[data-theme="light"] .ario-admin-page > .page-title { color:#1d3558 !important; text-shadow:none !important; }
+      body[data-theme="light"] .ario-admin-page > .hero-card,
+      body[data-theme="light"] .ario-admin-page .admin-section,
+      body[data-theme="light"] .ario-admin-page .ario-live-users,
+      body[data-theme="light"] .ario-admin-page .ario-user-management {
+        color:#263d5d !important;
+        background:linear-gradient(145deg,#f8fbff,#eaf1fb) !important;
+        border-color:#d5e1f1 !important;
+        box-shadow:0 14px 34px rgba(42,68,109,.08) !important;
+      }
+      body[data-theme="light"] .ario-admin-page .admin-section h3,
+      body[data-theme="light"] .ario-admin-page .ario-live-users h3,
+      body[data-theme="light"] .ario-admin-page .ario-user-management h3 { color:#23436e !important; border-color:#d8e3f1 !important; }
+      body[data-theme="light"] .ario-admin-page .admin-section h4 { color:#41679e !important; }
+      body[data-theme="light"] .ario-admin-page .admin-kpi-grid article {
+        color:#263d5d !important; background:linear-gradient(145deg,#fff,#eaf1fb) !important;
+        border-color:#d8e3f1 !important; box-shadow:0 10px 25px rgba(42,68,109,.07) !important;
+      }
+      body[data-theme="light"] .ario-admin-page .admin-kpi-grid article span,
+      body[data-theme="light"] .ario-admin-page .admin-kpi-grid article small { color:#647a99 !important; }
+      body[data-theme="light"] .ario-admin-page .admin-kpi-grid article strong { color:#23436e !important; }
+      body[data-theme="light"] .ario-admin-page .admin-section p,
+      body[data-theme="light"] .ario-admin-page .ario-user-management .users-intro,
+      body[data-theme="light"] .ario-admin-page .ario-live-users .live-subtitle { color:#5c7291 !important; }
+      body[data-theme="light"] .ario-admin-page .admin-section .admin-list-item,
+      body[data-theme="light"] .ario-admin-page .ario-user-management .user-card,
+      body[data-theme="light"] .ario-admin-page .ario-user-management .users-summary,
+      body[data-theme="light"] .ario-admin-page .ario-user-management .user-create-form,
+      body[data-theme="light"] .ario-admin-page .ario-live-users .live-metric,
+      body[data-theme="light"] .ario-admin-page .ario-live-users .live-table-wrap {
+        color:#294363 !important; background:rgba(255,255,255,.72) !important; border-color:#dce6f2 !important;
+      }
+      body[data-theme="light"] .ario-admin-page .admin-section input,
+      body[data-theme="light"] .ario-admin-page .admin-section textarea,
+      body[data-theme="light"] .ario-admin-page .admin-section select,
+      body[data-theme="light"] .ario-admin-page .ario-user-management .users-search {
+        color:#263b5b !important; background:#fff !important; border-color:#d4e0ef !important;
+      }
+      body[data-theme="light"] .ario-admin-page .ario-user-management .user-identity strong,
+      body[data-theme="light"] .ario-admin-page .ario-live-users .online-user-name { color:#263e62 !important; }
+      body[data-theme="light"] .ario-admin-page .ario-user-management .user-role,
+      body[data-theme="light"] .ario-admin-page .ario-live-users .online-role { color:#637995 !important; }
+      body[data-theme="light"] .ario-admin-page .ario-live-users table { color:#304968 !important; }
+      body[data-theme="light"] .ario-admin-page .ario-live-users th { color:#47658e !important; background:#eaf1fa !important; }
+    </style>
 </div>
 """)
 # ==========================================
@@ -5432,54 +5741,83 @@ del _ario_roads, _ario_map_svg, _ario_map_data
 # This final layer intentionally overrides older overlapping responsive rules.
 # ==========================================
 ARIO_MOBILE_LOGIN_CSS = r"""
-/* Mobile login: one predictable column, full-width form controls and no clipping. */
-html, body { width:100%; min-width:320px; max-width:100%; }
-body { overflow-x:hidden !important; }
-@media (max-width:900px) {
-  .login-topbar {
-    width:calc(100% - 24px) !important;
-    max-width:680px !important;
+/* Phone-only login layout. Desktop (761px and wider) keeps the original design. */
+@media screen and (max-width:760px) {
+  html, body {
+    width:100% !important;
+    max-width:100% !important;
     min-width:0 !important;
-    margin:12px auto 0 !important;
-    border-radius:20px !important;
+    overflow-x:hidden !important;
+  }
+  body {
+    min-height:100vh !important;
+    min-height:100dvh !important;
+  }
+  .login-topbar {
+    width:calc(100% - 20px) !important;
+    max-width:500px !important;
+    min-width:0 !important;
+    margin:10px auto 0 !important;
+    padding:8px 10px !important;
+    min-height:0 !important;
+    border-radius:17px !important;
+    gap:7px !important;
     flex-wrap:wrap !important;
     justify-content:center !important;
-    gap:10px !important;
   }
   .login-topbar .topbar-caption {
+    width:100% !important;
     min-width:0 !important;
     max-width:100% !important;
     justify-content:center !important;
     text-align:center !important;
+    font-size:.66rem !important;
+    line-height:1.5 !important;
   }
   .login-topbar-actions {
+    display:flex !important;
     width:100% !important;
     min-width:0 !important;
     flex:1 1 100% !important;
     justify-content:center !important;
+    align-items:center !important;
+    gap:7px !important;
     flex-wrap:wrap !important;
   }
+  .login-topbar-actions .theme-toggle,
+  .login-topbar-actions .ario-language-trigger {
+    min-height:38px !important;
+    padding:5px 10px !important;
+    font-size:.72rem !important;
+  }
+  .login-topbar-actions .ario-language-picker { flex:0 0 auto !important; }
+  .login-topbar-actions .ario-language-trigger { min-width:92px !important; }
+
   .page {
     display:flex !important;
     flex-direction:column !important;
     align-items:stretch !important;
     justify-content:flex-start !important;
-    gap:24px !important;
-    width:calc(100% - 28px) !important;
-    max-width:560px !important;
+    gap:14px !important;
+    width:calc(100% - 22px) !important;
+    max-width:500px !important;
+    min-width:0 !important;
     min-height:0 !important;
     height:auto !important;
-    margin:18px auto 0 !important;
-    padding:18px 0 42px !important;
+    margin:12px auto 0 !important;
+    padding:8px 0 25px !important;
   }
-  .auth-wrap {
-    order:1 !important;
+  /* The login card is first and never shrinks below the phone width. */
+  .page > .auth-wrap {
+    order:0 !important;
     display:block !important;
     width:100% !important;
     max-width:none !important;
     min-width:0 !important;
     margin:0 !important;
     justify-self:stretch !important;
+    animation:none !important;
+    transform:none !important;
   }
   .auth-card {
     display:block !important;
@@ -5487,49 +5825,97 @@ body { overflow-x:hidden !important; }
     max-width:none !important;
     min-width:0 !important;
     margin:0 !important;
-    padding:clamp(20px,5vw,30px) !important;
-    overflow:visible !important;
+    padding:18px 15px !important;
+    border-radius:21px !important;
+    overflow:hidden !important;
+    opacity:1 !important;
+    visibility:visible !important;
   }
   .auth-card, .auth-card * { box-sizing:border-box !important; }
-  .card-heading, .tabs, .auth-form, .input-shell, .input-shell input, .submit-btn {
-    width:100% !important;
-    max-width:100% !important;
-    min-width:0 !important;
+  .card-logo { gap:9px !important; margin-bottom:12px !important; }
+  .card-logo .brand-mark { width:36px !important; height:36px !important; font-size:17px !important; }
+  .card-logo span { font-size:.72rem !important; }
+  .card-heading { margin-bottom:13px !important; }
+  .card-heading h2 {
+    font-size:clamp(1.16rem,5.3vw,1.42rem) !important;
+    line-height:1.5 !important;
+    margin-bottom:5px !important;
   }
+  .card-heading p { font-size:.76rem !important; line-height:1.8 !important; }
+  .tabs { width:100% !important; margin-bottom:13px !important; padding:4px !important; gap:4px !important; }
+  .tab { min-width:0 !important; min-height:43px !important; padding:9px 5px !important; font-size:.79rem !important; }
+  .auth-form { width:100% !important; max-width:100% !important; min-width:0 !important; gap:9px !important; }
   .auth-form.active { display:flex !important; }
-  .input-shell input { height:54px !important; font-size:16px !important; }
-  .intro {
-    order:2 !important;
+  .field-label { font-size:.73rem !important; margin:0 2px -5px !important; }
+  .input-shell { width:100% !important; min-width:0 !important; }
+  .input-shell input {
     display:block !important;
     width:100% !important;
-    max-width:100% !important;
-    padding:14px 8px 0 !important;
-    text-align:center !important;
+    min-width:0 !important;
+    height:48px !important;
+    padding-inline:43px !important;
+    border-radius:12px !important;
+    color:#f7fbff !important;
+    background:rgba(4,14,29,.72) !important;
+    font-size:16px !important;
+    opacity:1 !important;
   }
-  .intro:before { inset:-8px !important; }
-  .intro-copy { max-width:100% !important; }
-  .feature-row { justify-content:center !important; }
-  .visual-card { width:100% !important; max-width:100% !important; margin:20px auto 0 !important; }
+  .input-shell input::placeholder { color:#91a4bd !important; opacity:1 !important; }
+  .submit-btn {
+    width:100% !important;
+    min-height:48px !important;
+    height:auto !important;
+    margin-top:2px !important;
+    padding:11px 12px !important;
+    font-size:.84rem !important;
+  }
+  .secure-note { margin-top:12px !important; font-size:.66rem !important; line-height:1.8 !important; }
+  .bottom-note { margin-top:8px !important; font-size:.61rem !important; line-height:1.8 !important; }
+
+  /* The introduction stays below the form; its large decorative panel is desktop-only. */
+  .page > .intro {
+    order:1 !important;
+    display:block !important;
+    width:100% !important;
+    max-width:none !important;
+    min-width:0 !important;
+    margin:0 !important;
+    padding:7px 8px 0 !important;
+    text-align:center !important;
+    animation:none !important;
+    transform:none !important;
+  }
+  .intro:before { inset:0 -4px !important; border-radius:18px !important; }
+  .intro .eyebrow { font-size:.62rem !important; padding:5px 9px !important; gap:6px !important; }
+  .intro h1 {
+    font-size:clamp(1.48rem,7vw,2rem) !important;
+    line-height:1.4 !important;
+    letter-spacing:-.45px !important;
+    margin:9px 0 6px !important;
+  }
+  .intro-copy { max-width:44ch !important; margin:0 auto !important; font-size:.75rem !important; line-height:1.85 !important; }
+  .feature-row { margin-top:10px !important; gap:6px !important; justify-content:center !important; }
+  .feature { padding:6px 8px !important; border-radius:10px !important; gap:5px !important; font-size:.62rem !important; }
+  .feature i { font-size:.72rem !important; }
+  .visual-card { display:none !important; }
 }
-@media (max-width:600px) {
-  .login-topbar { width:calc(100% - 20px) !important; padding:10px !important; }
-  .login-topbar-actions { gap:8px !important; }
-  .login-topbar-actions .language-toggle,
-  .login-topbar-actions .ario-language-trigger { min-width:0 !important; }
-  .page { width:calc(100% - 22px) !important; gap:20px !important; padding-top:14px !important; }
-  .auth-card { padding:21px 16px !important; border-radius:22px 8px 22px 8px !important; }
-  .card-logo { margin-bottom:17px !important; }
-  .card-heading { margin-bottom:19px !important; }
-  .card-heading h2 { font-size:clamp(1.3rem,6vw,1.6rem) !important; line-height:1.55 !important; }
-  .card-heading p { font-size:.82rem !important; }
-  .tabs { margin-bottom:18px !important; }
-  .tab { min-height:46px !important; font-size:.85rem !important; }
-  .auth-form { gap:13px !important; }
-  .input-shell input { height:52px !important; padding-inline:44px !important; }
-  .submit-btn { min-height:52px !important; height:auto !important; padding:13px 12px !important; }
-  .secure-note, .bottom-note { line-height:1.9 !important; }
-  .intro h1 { font-size:clamp(2rem,9vw,2.65rem) !important; line-height:1.42 !important; letter-spacing:-.8px !important; }
-  .feature { flex:1 1 135px !important; justify-content:center !important; }
+@media screen and (max-width:380px) {
+  .page { width:calc(100% - 18px) !important; gap:11px !important; }
+  .auth-card { padding:16px 12px !important; }
+  .card-heading h2 { font-size:1.12rem !important; }
+  .tab { font-size:.75rem !important; }
+  .feature { flex:1 1 125px !important; justify-content:center !important; }
+  .intro h1 { font-size:1.48rem !important; }
+}
+@media screen and (max-width:760px) and (max-height:650px) {
+  .page { margin-top:7px !important; padding-top:5px !important; gap:9px !important; }
+  .auth-card { padding-top:13px !important; padding-bottom:13px !important; }
+  .card-logo { margin-bottom:9px !important; }
+  .card-heading { margin-bottom:9px !important; }
+  .tabs { margin-bottom:9px !important; }
+  .auth-form { gap:7px !important; }
+  .input-shell input { height:44px !important; }
+  .submit-btn { min-height:44px !important; }
 }
 """
 AUTH_HTML = AUTH_HTML.replace("</style>", ARIO_MOBILE_LOGIN_CSS + "\n</style>", 1)
