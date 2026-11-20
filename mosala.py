@@ -3992,20 +3992,29 @@ def contact():
               تماس مستقیم با مدرسه
             </a>
           </div>
-          <div class="contact-route-note">برای محاسبه مسیر، اجازه دسترسی مرورگر به موقعیت مکانی را بدهید و GPS را روشن کنید. اگر اجازه ندهید، موقعیت مدرسه در نشان باز می‌شود تا مبدأ را دستی انتخاب کنید.</div>
+          <div class="contact-route-note">در گوشی، نشان با GPS خودِ برنامه مبدأ را از موقعیت فعلی می‌گیرد؛ دسترسی موقعیت مکانی را به برنامهٔ نشان بده و GPS گوشی را روشن کن. در لپ‌تاپ، مبدأ را در نسخهٔ وب نشان روی «موقعیت فعلی» تنظیم کن.</div>
           <div class="contact-route-status" id="arioRouteStatus" role="status" aria-live="polite"></div>
         </article>
       </section>
 
       <script>
       (function () {
+        // مقصد ثابت مدرسه آریو در محله بازارباش، ارومیه
         var latitude = '37.5452625';
         var longitude = '45.076921875';
         var destination = latitude + ',' + longitude;
         var webMap = 'https://neshan.org/maps/share/' + destination;
+        var androidMap = 'https://nshn.ir?lat=' + latitude + '&lng=' + longitude;
+        var androidRoute = 'https://nshn.ir/?destination=' + encodeURIComponent(destination);
+        var iosMap = 'neshan://?destination=' + encodeURIComponent(destination);
+        // با حذف origin، خود برنامه نشان مبدأ را از GPS گوشی می‌گیرد.
+        var iosRoute = 'neshan://?destination=' + encodeURIComponent(destination);
         var isAndroid = /Android/i.test(navigator.userAgent || '');
-        var isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent || '');
+        var isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent || '') ||
+          (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+        var isMobile = isAndroid || isIOS;
         var routeStatus = document.getElementById('arioRouteStatus');
+        var appFallbackTimer = null;
 
         function showRouteStatus(message) {
           if (!routeStatus) return;
@@ -4013,32 +4022,39 @@ def contact():
           routeStatus.classList.add('show');
         }
 
-        function openNeshan(nativeUrl, fallbackUrl) {
-          if (isAndroid) {
-            window.location.href = nativeUrl;
-            return;
+        function openMobileApp(appUrl, fallbackMessage) {
+          // در موبایل، نیازی به مجوز موقعیت مکانی مرورگر نیست؛ خود نشان GPS را می‌خواند.
+          showRouteStatus('در حال باز کردن نشان… اجازهٔ دسترسی موقعیت مکانی را به خودِ برنامهٔ نشان بده تا مسیر از محل فعلی‌ات محاسبه شود.');
+          if (appFallbackTimer) window.clearTimeout(appFallbackTimer);
+          var wentBackground = false;
+          function onVisibilityChange() {
+            if (document.hidden) {
+              wentBackground = true;
+              if (appFallbackTimer) window.clearTimeout(appFallbackTimer);
+            }
           }
-          if (isIOS) {
-            var fallbackTimer = window.setTimeout(function () {
-              if (!document.hidden) window.location.href = fallbackUrl;
-            }, 1100);
-            document.addEventListener('visibilitychange', function () {
-              if (document.hidden) window.clearTimeout(fallbackTimer);
-            }, { once: true });
-            window.location.href = nativeUrl;
-            return;
-          }
-          window.open(fallbackUrl, '_blank', 'noopener,noreferrer');
+          document.addEventListener('visibilitychange', onVisibilityChange);
+          window.location.href = appUrl;
+          // اگر برنامه نصب نباشد یا پیوند باز نشود، صفحهٔ نقشهٔ وب به‌عنوان جایگزین باز می‌شود.
+          appFallbackTimer = window.setTimeout(function () {
+            document.removeEventListener('visibilitychange', onVisibilityChange);
+            if (!wentBackground && !document.hidden) {
+              showRouteStatus(fallbackMessage);
+              window.location.href = webMap;
+            }
+          }, 1800);
         }
 
         var mapButton = document.getElementById('arioNeshanMap');
         if (mapButton) {
           mapButton.addEventListener('click', function (event) {
-            if (!isAndroid && !isIOS) return;
+            if (!isMobile) return;
             event.preventDefault();
-            var androidMap = 'https://nshn.ir?lat=' + latitude + '&lng=' + longitude;
-            var iosMap = 'neshan://?destination=' + encodeURIComponent(destination);
-            openNeshan(isAndroid ? androidMap : iosMap, webMap);
+            if (isAndroid) {
+              window.location.href = androidMap;
+            } else {
+              openMobileApp(iosMap, 'برنامهٔ نشان باز نشد؛ موقعیت مدرسه در نسخهٔ وب باز می‌شود.');
+            }
           });
         }
 
@@ -4046,42 +4062,23 @@ def contact():
         if (directionsButton) {
           directionsButton.addEventListener('click', function (event) {
             event.preventDefault();
-            showRouteStatus('در حال دریافت موقعیت فعلی برای ساخت مسیر...');
-            var webMapTab = (!isAndroid && !isIOS) ? window.open('about:blank', '_blank') : null;
-            if (webMapTab) webMapTab.opener = null;
-
-            function openSchoolOnWebMap(message) {
-              if (webMapTab && !webMapTab.closed) {
-                webMapTab.location.href = webMap;
-              } else {
-                window.location.href = webMap;
-              }
-              showRouteStatus(message);
+            if (isAndroid) {
+              openMobileApp(androidRoute, 'برنامهٔ نشان باز نشد؛ نقشهٔ مدرسه باز می‌شود. برای مسیریابی، مبدأ را «موقعیت فعلی» انتخاب کن.');
+              return;
             }
-
-            if (!navigator.geolocation) {
-              openSchoolOnWebMap('مرورگر شما موقعیت مکانی را پشتیبانی نمی‌کند؛ موقعیت مدرسه باز شد. مبدأ را در نشان دستی انتخاب کنید.');
+            if (isIOS) {
+              openMobileApp(iosRoute, 'برنامهٔ نشان باز نشد؛ نقشهٔ مدرسه باز می‌شود. برای مسیریابی، مبدأ را «موقعیت فعلی» انتخاب کن.');
               return;
             }
 
-            navigator.geolocation.getCurrentPosition(function (position) {
-              var origin = position.coords.latitude + ',' + position.coords.longitude;
-              var encodedOrigin = encodeURIComponent(origin);
-              var encodedDestination = encodeURIComponent(destination);
-              var androidDirections = 'https://nshn.ir/?origin=' + encodedOrigin + '&destination=' + encodedDestination;
-              var iosDirections = 'neshan://?origin=' + encodedOrigin + '&destination=' + encodedDestination;
-
-              if (isAndroid) {
-                window.location.href = androidDirections;
-              } else if (isIOS) {
-                openNeshan(iosDirections, webMap);
-              } else {
-                // Neshan's documented browser fallback opens the map; native apps receive the full route.
-                openSchoolOnWebMap('موقعیت شما دریافت شد؛ نسخه وب نشان نقشه مقصد را باز می‌کند. در نقشه، مبدأ را روی «موقعیت فعلی» بگذارید تا مسیر نمایش داده شود.');
-              }
-            }, function () {
-              openSchoolOnWebMap('دسترسی به موقعیت مکانی داده نشد؛ موقعیت مدرسه در نشان باز شد. در نشان مبدأ را «موقعیت فعلی» انتخاب کنید.');
-            }, { enableHighAccuracy: true, timeout: 12000, maximumAge: 60000 });
+            // روی لپ‌تاپ، مرورگر مسیر را به اپ موبایل نمی‌فرستد؛ نقشه باز می‌شود.
+            if (!navigator.geolocation) {
+              showRouteStatus('نقشهٔ مدرسه باز می‌شود. در نسخهٔ وب نشان، مبدأ را روی «موقعیت فعلی» تنظیم کن.');
+              window.open(webMap, '_blank', 'noopener,noreferrer');
+              return;
+            }
+            showRouteStatus('نقشهٔ مدرسه باز می‌شود. برای مسیر دقیق، مبدأ را روی «موقعیت فعلی» تنظیم کن.');
+            window.open(webMap, '_blank', 'noopener,noreferrer');
           });
         }
       })();
