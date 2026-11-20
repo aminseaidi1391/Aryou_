@@ -201,7 +201,7 @@ BASE_TEMPLATE = """
 </html>
 """
 # ==========================================
-# صفحه ورود لاکچری (تیره، ماه و ستاره - کاملاً بهینه برای موبایل)
+# صفحه ورود لاکچری (با حرکت ابرها، نور خورشید و دکمه هوشمند)
 # ==========================================
 AUTH_HTML = """
 <!DOCTYPE html>
@@ -214,8 +214,24 @@ AUTH_HTML = """
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Vazirmatn', sans-serif; }
-        body { background: #0f172a; min-height: 100vh; min-height: 100dvh; display: flex; justify-content: center; align-items: center; position: relative; overflow-x: hidden; overflow-y: auto; padding: 20px; }
-        .glow, .glow2, .stars, .moon, .shooting-star { pointer-events: none; }
+        
+        /* حالت پیش‌فرض: شب */
+        body { 
+            background: #0f172a; 
+            min-height: 100vh; 
+            min-height: 100dvh; 
+            display: flex; 
+            justify-content: center; 
+            align-items: center; 
+            position: relative; 
+            overflow-x: hidden; 
+            overflow-y: auto; 
+            padding: 20px;
+            transition: background 1s ease; 
+        }
+        
+        /* --- افکت‌های شب --- */
+        .night-elements { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; transition: opacity 0.8s ease; z-index: 0; }
         .glow { position: absolute; width: 600px; height: 600px; background: radial-gradient(circle, rgba(79,70,229,0.4) 0%, rgba(15,23,42,0) 70%); top: -200px; left: -200px; border-radius: 50%; animation: pulse 8s infinite alternate; }
         .glow2 { position: absolute; width: 500px; height: 500px; background: radial-gradient(circle, rgba(16,185,129,0.3) 0%, rgba(15,23,42,0) 70%); bottom: -150px; right: -100px; border-radius: 50%; animation: pulse 10s infinite alternate-reverse; }
         @keyframes pulse { 0% { transform: scale(1); opacity: 0.6; } 100% { transform: scale(1.2); opacity: 1; } }
@@ -224,11 +240,81 @@ AUTH_HTML = """
         .moon { position: absolute; top: 8%; right: 10%; width: 80px; height: 80px; background: #fdf4dc; border-radius: 50%; box-shadow: 0 0 40px 10px rgba(253, 244, 220, 0.3); z-index: 1; }
         .shooting-star { position: absolute; top: 0; left: -100px; width: 100px; height: 2px; background: linear-gradient(90deg, rgba(255,255,255,1), rgba(255,255,255,0)); animation: shoot 4s linear infinite; z-index: 2; opacity: 0; }
         @keyframes shoot { 0% { transform: translateX(0) translateY(0) rotate(45deg); opacity: 1; } 20% { transform: translateX(600px) translateY(600px) rotate(45deg); opacity: 0; } 100% { transform: translateX(600px) translateY(600px) rotate(45deg); opacity: 0; } }
+
+        /* --- افکت‌های صبح (نور خورشید و ابرها) --- */
+        .day-elements { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; opacity: 0; transition: opacity 1s ease; z-index: 0; }
         
-        .auth-box { position: relative; z-index: 10; background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); border: 1px solid rgba(255, 255, 255, 0.1); padding: 40px 30px; border-radius: 30px; text-align: center; color: #fff; width: 100%; max-width: 400px; box-shadow: 0 30px 60px rgba(0,0,0,0.4); margin: auto; }
-        .auth-box h2 { font-size: 1.8rem; margin-bottom: 30px; font-weight: 900; background: linear-gradient(to right, #a5b4fc, #818cf8); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        /* نور خورشید از گوشه بالا راست */
+        .sun-glow { position: absolute; top: -150px; right: -150px; width: 600px; height: 600px; background: radial-gradient(circle, rgba(253, 224, 71, 0.4) 0%, rgba(253, 224, 71, 0) 60%); border-radius: 50%; }
+
+        /* ابرها با انیمیشن حرکت */
+        .cloud { position: absolute; background: #fff; border-radius: 50px; opacity: 0.8; box-shadow: inset -5px -5px 15px rgba(0,0,0,0.05); }
+        .cloud::before, .cloud::after { content: ''; position: absolute; background: #fff; border-radius: 50%; }
         
-        /* تب‌های ورود و ثبت‌نام */
+        .cloud1 { width: 140px; height: 40px; top: 15%; left: 10%; animation: floatCloud1 25s linear infinite alternate; }
+        .cloud1::before { width: 60px; height: 60px; top: -30px; left: 20px; }
+        .cloud1::after { width: 80px; height: 80px; top: -40px; right: 20px; }
+        
+        .cloud2 { width: 180px; height: 50px; top: 25%; right: 15%; animation: floatCloud2 35s linear infinite alternate; }
+        .cloud2::before { width: 80px; height: 80px; top: -40px; left: 25px; }
+        .cloud2::after { width: 100px; height: 100px; top: -50px; right: 25px; }
+        
+        .cloud3 { width: 100px; height: 30px; bottom: 20%; left: 25%; opacity: 0.6; animation: floatCloud1 20s linear infinite alternate-reverse; }
+        .cloud3::before { width: 50px; height: 50px; top: -25px; left: 15px; }
+        
+        @keyframes floatCloud1 {
+            0% { transform: translateX(0); }
+            100% { transform: translateX(150px); }
+        }
+        @keyframes floatCloud2 {
+            0% { transform: translateX(0); }
+            100% { transform: translateX(-200px); }
+        }
+
+        /* --- کادر ورود --- */
+        .auth-box { 
+            position: relative; 
+            z-index: 10; 
+            background: rgba(30, 41, 59, 0.7); 
+            backdrop-filter: blur(20px); 
+            -webkit-backdrop-filter: blur(20px); 
+            border: 1px solid rgba(255, 255, 255, 0.1); 
+            padding: 40px 30px; 
+            border-radius: 30px; 
+            text-align: center; 
+            color: #fff; 
+            width: 100%; 
+            max-width: 420px; 
+            box-shadow: 0 30px 60px rgba(0,0,0,0.4); 
+            margin: auto; 
+            transition: all 0.8s ease;
+        }
+        
+        /* عنوان بزرگ وسط‌چین */
+        .auth-box h2 { font-size: 2.2rem; font-weight: 900; margin-bottom: 25px; background: linear-gradient(to right, #a5b4fc, #818cf8); -webkit-background-clip: text; -webkit-text-fill-color: transparent; transition: 0.5s; }
+        
+        /* دکمه بزرگ تغییر تم */
+        .theme-toggle-btn { 
+            display: flex; 
+            align-items: center; 
+            justify-content: center; 
+            gap: 10px; 
+            width: 100%; 
+            padding: 14px; 
+            margin-bottom: 30px; 
+            background: rgba(255, 255, 255, 0.1); 
+            border: 1px solid rgba(255, 255, 255, 0.2); 
+            border-radius: 15px; 
+            color: #fff; 
+            font-size: 1rem; 
+            font-weight: 700; 
+            cursor: pointer; 
+            transition: all 0.3s ease;
+            font-family: inherit;
+        }
+        .theme-toggle-btn:hover { background: rgba(255, 255, 255, 0.2); transform: translateY(-2px); box-shadow: 0 5px 15px rgba(0,0,0,0.2); }
+
+        /* فرم‌ها */
         .tabs { display: flex; margin-bottom: 25px; background: rgba(0,0,0,0.2); border-radius: 12px; padding: 5px; }
         .tab { flex: 1; padding: 10px; cursor: pointer; color: #94a3b8; transition: 0.3s; font-weight: 700; border-radius: 8px; font-size: 0.95rem; }
         .tab.active { background: #4f46e5; color: #fff; box-shadow: 0 4px 15px rgba(79, 70, 229, 0.4); }
@@ -238,12 +324,39 @@ AUTH_HTML = """
         @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
         
         .input-group { position: relative; }
-        .input-group i { position: absolute; right: 15px; top: 50%; transform: translateY(-50%); color: #64748b; font-size: 1.1rem; }
+        .input-group i { position: absolute; right: 15px; top: 50%; transform: translateY(-50%); color: #64748b; font-size: 1.1rem; transition: 0.5s; }
         input { width: 100%; padding: 14px 45px 14px 15px; border-radius: 12px; border: 2px solid rgba(255,255,255,0.05); background: rgba(0,0,0,0.3); color: #fff; font-family: inherit; outline: none; transition: 0.3s; font-size: 16px; }
         input:focus { border-color: #818cf8; background: rgba(0,0,0,0.5); box-shadow: 0 0 0 3px rgba(129, 140, 248, 0.2); }
-        button { background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%); border: none; padding: 15px; border-radius: 12px; color: #fff; font-size: 1.1rem; font-weight: 800; cursor: pointer; transition: 0.3s; margin-top: 10px; font-family: inherit; }
-        button:hover { transform: translateY(-2px); box-shadow: 0 10px 20px rgba(79, 70, 229, 0.4); }
+        button[type="submit"] { background: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%); border: none; padding: 15px; border-radius: 12px; color: #fff; font-size: 1.1rem; font-weight: 800; cursor: pointer; transition: 0.3s; margin-top: 10px; font-family: inherit; }
+        button[type="submit"]:hover { transform: translateY(-2px); box-shadow: 0 10px 20px rgba(79, 70, 229, 0.4); }
         .msg { margin-top: 15px; font-size: 0.9rem; color: #f87171; font-weight: bold; }
+
+        /* ========================================== */
+        /* تنظیمات حالت صبح (وقتی دکمه صبح زده میشه) */
+        /* ========================================== */
+        body.day-mode { background: linear-gradient(to bottom, #7dd3fc 0%, #fde047 100%); }
+        
+        body.day-mode .night-elements { opacity: 0; }
+        body.day-mode .day-elements { opacity: 1; }
+        
+        body.day-mode .auth-box { 
+            background: rgba(255, 255, 255, 0.6); 
+            border: 1px solid rgba(255, 255, 255, 0.8);
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+        }
+        body.day-mode .auth-box h2 { background: linear-gradient(to right, #1e3a8a, #2563eb); -webkit-background-clip: text; }
+        
+        body.day-mode .theme-toggle-btn { background: rgba(0,0,0,0.05); border-color: rgba(0,0,0,0.1); color: #1e293b; }
+        body.day-mode .theme-toggle-btn:hover { background: rgba(0,0,0,0.1); box-shadow: 0 5px 15px rgba(0,0,0,0.1); }
+        
+        body.day-mode .tabs { background: rgba(255,255,255,0.5); }
+        body.day-mode .tab { color: #475569; }
+        body.day-mode .tab.active { background: #3b82f6; color: #fff; }
+        
+        body.day-mode input { background: rgba(255,255,255,0.8); color: #333; border: 1px solid #ccc; }
+        body.day-mode input:focus { border-color: #3b82f6; background: #fff; }
+        body.day-mode .input-group i { color: #666; }
+        body.day-mode button[type="submit"] { background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%); box-shadow: 0 4px 15px rgba(59, 130, 246, 0.4); }
     </style>
     <script>
         function switchTab(tabId) {
@@ -252,13 +365,48 @@ AUTH_HTML = """
             document.getElementById('tab-' + tabId).classList.add('active');
             document.getElementById('form-' + tabId).classList.add('active');
         }
+
+        function toggleTheme() {
+            const body = document.body;
+            const btnText = document.getElementById('btnText');
+            const btnIcon = document.getElementById('btnIcon');
+            
+            body.classList.toggle('day-mode');
+            
+            if (body.classList.contains('day-mode')) {
+                btnText.innerText = 'تغییر به شب';
+                btnIcon.className = 'fas fa-moon';
+            } else {
+                btnText.innerText = 'تغییر به صبح';
+                btnIcon.className = 'fas fa-sun';
+            }
+        }
     </script>
 </head>
 <body>
-    <div class="glow"></div><div class="glow2"></div><div class="stars"></div><div class="moon"></div><div class="shooting-star"></div>
+    <!-- عناصر شب -->
+    <div class="night-elements">
+        <div class="glow"></div><div class="glow2"></div>
+        <div class="stars"></div><div class="moon"></div><div class="shooting-star"></div>
+    </div>
+
+    <!-- عناصر صبح (نور خورشید و ابرها) -->
+    <div class="day-elements">
+        <div class="sun-glow"></div>
+        <div class="cloud cloud1"></div>
+        <div class="cloud cloud2"></div>
+        <div class="cloud cloud3"></div>
+    </div>
     
     <div class="auth-box">
+        <!-- عنوان بزرگ وسط -->
         <h2>آریو مصلی‌نژاد</h2>
+        
+        <!-- دکمه بزرگ تغییر تم -->
+        <button class="theme-toggle-btn" onclick="toggleTheme()">
+        <i class="fas fa-sun" id="btnIcon"></i>
+            <span id="btnText">تغییر به صبح</span>
+        </button>
         
         <div class="tabs">
             <div id="tab-login" class="tab active" onclick="switchTab('login')">ورود</div>
