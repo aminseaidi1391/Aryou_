@@ -1060,6 +1060,7 @@ html[lang="en"] .login-topbar-actions { margin-left:auto; }
             <a href="/about" class="{{ 'active' if active_page == 'about' else '' }}">درباره ما</a>
             <a href="/staff" class="{{ 'active' if active_page == 'staff' else '' }}">کادر مدرسه</a>
             <a href="/activities" class="{{ 'active' if active_page == 'activities' else '' }}">فعالیت‌ها</a>
+            <a href="/library" class="{{ 'active' if active_page == 'library' else '' }}">کتابخانه</a>
             <a href="/news" class="{{ 'active' if active_page == 'news' else '' }}">اخبار</a>
             <a href="/contact" class="{{ 'active' if active_page == 'contact' else '' }}">تماس</a>
             {% if session.get('role') in ["مدیر سایت (شما)", "مدیر مدرسه"] %}
@@ -1136,6 +1137,7 @@ html[lang="en"] .login-topbar-actions { margin-left:auto; }
     "درباره ما": "About Us",
     "کادر مدرسه": "Our Team",
     "فعالیت‌ها": "Activities",
+    "کتابخانه": "Library",
     "اخبار": "News",
     "تماس": "Contact",
     "تماس با ما": "Contact Us",
@@ -2414,7 +2416,11 @@ def logout():
 def home():
     if 'username' not in session: return redirect(url_for('index'))
     data = load_data()
-    cards = data['sections'].get('home', [])
+    cards = [
+        card for card in data['sections'].get('home', [])
+        if 'کتابخانه' not in str(card.get('title', '')).lower()
+        and 'library' not in str(card.get('title_en', '')).lower()
+    ]
     def image_for_school_card(card, index):
         words = (str(card.get('title', '')) + ' ' + str(card.get('text', ''))).lower()
         if any(k in words for k in ('کتاب', 'مطالعه', 'library')): return '/ario-image/library'
@@ -2507,6 +2513,58 @@ def activities_page():
       <section class="experience-list">{cards_html or '<div class="empty-state">هنوز فعالیتی ثبت نشده است.</div>'}</section>
     </main>"""
     return render_template_string(BASE_TEMPLATE.replace("{% block content %}{% endblock %}", content).replace("{{ title }}", "فعالیت‌ها").replace("{{ active_page }}", "activities"))
+
+@app.route('/library')
+def library_page():
+    if 'username' not in session: return redirect(url_for('index'))
+    content = """<main class="inner-page editorial-inner library-page">
+      <section class="inner-hero library-hero">
+        <div class="inner-hero-image" style="background-image:url('/ario-image/library')"></div>
+        <div class="inner-hero-overlay"></div>
+        <div class="inner-hero-copy">
+          <span class="section-eyebrow">ARIO SCHOOL · LIBRARY</span>
+          <h1>خانه‌ی <em>کتاب‌ها</em><br>و ایده‌های تازه.</h1>
+          <p>جایی برای ورق زدن، پرسیدن، خیال‌پردازی و پیدا کردن جهان‌های تازه.</p>
+        </div>
+      </section>
+      <section class="story-layout library-intro">
+        <div class="story-side"><span>READ · DISCOVER · GROW</span><h2>هر کتاب،<br>یک پنجره.</h2></div>
+        <div class="story-main">
+          <p class="story-lead">کتابخانه آریو فرصتی برای آرامش، مطالعه و کشف دانسته‌های تازه است.</p>
+          <p>اینجا می‌توانیم با کتاب‌ها همراه شویم، سؤال‌های تازه پیدا کنیم و قدمی به دنیای بزرگ‌تر دانش نزدیک‌تر شویم.</p>
+        </div>
+      </section>
+      <section class="library-responsibles">
+        <div class="library-responsibles-photo" role="img" aria-label="دانش‌آموزان پسر در حال مطالعه در کتابخانه"></div>
+        <div class="library-responsibles-card">
+          <span class="section-eyebrow">LIBRARY TEAM</span>
+          <div class="library-card-icon"><i class="fas fa-book-open"></i></div>
+          <h2>مسئولان کتابخانه</h2>
+          <div class="library-names">
+            <div><span>۰۱</span><strong>سبحان علیزاده</strong></div>
+            <div><span>۰۲</span><strong>پرهام قاسم‌نژاد</strong></div>
+          </div>
+          <p>با همراهی و تلاش این دو عزیز، کتابخانه آریو پویاتر و منظم‌تر می‌شود.</p>
+        </div>
+      </section>
+    </main>
+    <style>
+      .library-page .library-hero .inner-hero-image { background-position:center 48%; }
+      .library-responsibles { width:min(1120px, calc(100% - 40px)); margin:70px auto 100px; display:grid; grid-template-columns:1.05fr .95fr; gap:24px; align-items:stretch; }
+      .library-responsibles-photo { min-height:390px; border-radius:28px; background:url('/ario-image/study') center/cover no-repeat; box-shadow:0 22px 60px rgba(4,18,43,.18); }
+      .library-responsibles-card { position:relative; overflow:hidden; border:1px solid rgba(203,169,92,.32); border-radius:28px; padding:clamp(28px,4vw,52px); background:linear-gradient(145deg,#071a36,#102c50 72%,#173d66); color:#fff; box-shadow:0 22px 60px rgba(4,18,43,.18); display:flex; flex-direction:column; justify-content:center; }
+      .library-responsibles-card:after { content:'ARIO'; position:absolute; left:20px; bottom:-28px; font-size:clamp(70px,12vw,130px); font-weight:900; letter-spacing:8px; color:rgba(255,255,255,.035); pointer-events:none; }
+      .library-responsibles-card .section-eyebrow { color:#e5bd68; letter-spacing:2px; font-size:12px; }
+      .library-card-icon { width:58px; height:58px; display:grid; place-items:center; border-radius:18px; margin:20px 0 16px; color:#f2c96e; background:rgba(242,201,110,.12); border:1px solid rgba(242,201,110,.3); font-size:25px; }
+      .library-responsibles-card h2 { font-size:clamp(25px,3vw,36px); margin-bottom:22px; color:#fff; }
+      .library-names { display:grid; gap:12px; position:relative; z-index:1; }
+      .library-names div { display:flex; align-items:center; gap:16px; padding:16px 18px; border-radius:16px; background:rgba(255,255,255,.075); border:1px solid rgba(255,255,255,.12); }
+      .library-names span { color:#e7bf6c; font-size:13px; font-weight:800; }
+      .library-names strong { color:#fff; font-size:18px; }
+      .library-responsibles-card > p { color:#cbd8e8; line-height:2; margin-top:20px; max-width:440px; }
+      @media(max-width:760px) { .library-responsibles { grid-template-columns:1fr; margin:48px auto 70px; } .library-responsibles-photo { min-height:270px; } }
+    </style>"""
+    return render_template_string(BASE_TEMPLATE.replace("{% block content %}{% endblock %}", content).replace("{{ title }}", "کتابخانه").replace("{{ active_page }}", "library"))
 
 @app.route('/news')
 def news_page():
