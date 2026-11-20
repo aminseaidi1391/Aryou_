@@ -1477,6 +1477,48 @@ html[lang="en"] .login-topbar-actions { margin-left:auto; }
 })();
 </script>
 
+<style id="ario-premium-polish">
+:root{--ario-ink:#06172f;--ario-navy:#0a2344;--ario-blue:#173d68;--ario-gold:#e8bd68;--ario-ice:#dce9f7;--ario-line:rgba(188,210,239,.18)}
+html{scroll-behavior:smooth}
+body{background:radial-gradient(ellipse at 12% 0%,rgba(48,91,143,.18),transparent 34%),linear-gradient(180deg,#07172e 0%,#0a1d37 48%,#07172e 100%);color:#edf4ff}
+body:before{content:"";position:fixed;inset:0;pointer-events:none;z-index:0;opacity:.14;background-image:radial-gradient(rgba(226,238,255,.35) .65px,transparent .65px);background-size:24px 24px;mask-image:linear-gradient(to bottom,black,transparent 75%)}
+header{position:sticky!important;top:0;z-index:1200!important;backdrop-filter:blur(22px) saturate(145%);-webkit-backdrop-filter:blur(22px) saturate(145%);background:rgba(4,17,37,.88)!important;border-bottom:1px solid rgba(218,190,128,.22)!important;box-shadow:0 12px 40px rgba(0,0,0,.22)!important;padding:13px clamp(16px,4vw,54px)!important}
+.logo-box{background:linear-gradient(145deg,#f7d98e,#c9953e)!important;color:#07172e!important;box-shadow:0 7px 24px rgba(220,174,91,.24)!important;border-radius:16px!important}
+.logo-text{color:#f4f7fc!important;letter-spacing:.2px}
+.logo-text span{color:#b9cbe0!important}
+header nav a{color:#d2deee!important;border:1px solid transparent;border-radius:999px!important;padding:10px 15px!important;transition:all .25s ease!important}
+header nav a:hover,header nav a.active{background:linear-gradient(120deg,rgba(225,185,98,.17),rgba(130,169,218,.12))!important;border-color:rgba(230,192,116,.32)!important;color:#f6d58f!important;box-shadow:inset 0 0 18px rgba(255,255,255,.025)}
+.auth-btns button,.language-toggle,.theme-toggle{border-radius:999px!important}
+button,.btn,.cta-solid,.cta-ghost,.btn-outline{transition:transform .25s ease,box-shadow .25s ease,background .25s ease!important}
+button:hover,.btn:hover,.cta-solid:hover,.cta-ghost:hover,.btn-outline:hover{transform:translateY(-2px)}
+.signature-hero{border-radius:0 0 34px 34px!important;box-shadow:0 28px 70px rgba(0,0,0,.26)!important}
+.hero-content{max-width:780px}
+.hero-overline{letter-spacing:2.5px!important}
+.hero-content h1{letter-spacing:-1.2px!important}
+.hero-cta .cta-solid{border-radius:999px!important;padding:16px 26px!important;box-shadow:0 12px 30px rgba(225,183,91,.22)}
+.hero-cta .cta-ghost{border-radius:999px!important;border:1px solid rgba(220,235,255,.42)!important;backdrop-filter:blur(10px)}
+.container{position:relative;z-index:1}
+.page-title{color:#f4f7fc!important;text-wrap:balance}
+section:not(.signature-hero){scroll-margin-top:110px}
+.inner-hero{border-radius:0 0 32px 32px!important;overflow:hidden;box-shadow:0 25px 65px rgba(0,0,0,.22)!important}
+.inner-hero-copy h1{letter-spacing:-.8px;text-shadow:0 8px 30px rgba(0,0,0,.3)}
+.story-layout,.library-responsibles,.staff-grid,.experience-row,.journal-row{position:relative;z-index:1}
+.story-layout{border:1px solid var(--ario-line)!important;border-radius:28px!important;background:linear-gradient(135deg,rgba(17,43,76,.78),rgba(8,25,48,.88))!important;box-shadow:0 22px 60px rgba(0,0,0,.16)!important;padding:clamp(24px,4vw,48px)!important}
+.story-side h2,.story-main .story-lead{color:#f5f8fd!important}
+.experience-row,.journal-row{border:1px solid rgba(192,213,242,.17)!important;border-radius:24px!important;background:linear-gradient(120deg,rgba(17,43,76,.92),rgba(8,25,48,.96))!important;box-shadow:0 14px 38px rgba(0,0,0,.15)!important;overflow:hidden;transition:transform .3s ease,border-color .3s ease,box-shadow .3s ease!important}
+.experience-row:hover,.journal-row:hover{transform:translateY(-6px)!important;border-color:rgba(231,193,116,.48)!important;box-shadow:0 24px 55px rgba(0,0,0,.26)!important}
+.experience-photo,.journal-photo{overflow:hidden}
+.staff-row,.staff-card,.team-card{border-radius:24px!important;overflow:hidden;border:1px solid rgba(192,213,242,.18)!important;box-shadow:0 18px 45px rgba(0,0,0,.2)!important}
+.library-responsibles-photo{border:1px solid rgba(226,190,112,.28);box-shadow:0 24px 60px rgba(0,0,0,.25)!important}
+.library-responsibles-card{box-shadow:0 24px 60px rgba(0,0,0,.25)!important}
+a{ text-underline-offset:4px }
+footer{border-top:1px solid rgba(226,190,112,.22)!important;background:rgba(3,14,30,.78)!important}
+::selection{background:rgba(231,190,104,.36);color:#fff}
+@media(max-width:900px){header{gap:12px!important;padding:10px 14px!important}header nav{gap:3px!important;flex-wrap:wrap;justify-content:center}header nav a{font-size:.82rem!important;padding:8px 11px!important}}
+@media(max-width:600px){header{position:relative!important;flex-direction:column!important}header nav{width:100%;overflow-x:auto;flex-wrap:nowrap!important;justify-content:flex-start!important;padding:4px 0 8px;scrollbar-width:none}header nav::-webkit-scrollbar{display:none}header nav a{flex:0 0 auto;font-size:.78rem!important}.signature-hero{border-radius:0 0 22px 22px!important}.story-layout{border-radius:20px!important}}
+@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}*,*:before,*:after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}}
+</style>
+
 </body>
 </html>
 """
@@ -1880,6 +1922,72 @@ html[lang="en"] .admin-section h3 { text-align:left !important; }
 html[lang="en"] .login-topbar-actions { margin-left:auto; }
 .language-toggle { min-width:78px; }
 
+
+        /* Login page language switch: compact pill, never a square button */
+        .login-topbar-actions {
+            display:flex !important;
+            align-items:center !important;
+            justify-content:flex-end !important;
+            gap:10px !important;
+            flex:0 0 auto !important;
+            min-width:max-content !important;
+        }
+        .login-topbar-actions .language-toggle {
+            appearance:none !important;
+            -webkit-appearance:none !important;
+            display:inline-flex !important;
+            align-items:center !important;
+            justify-content:center !important;
+            gap:9px !important;
+            width:auto !important;
+            min-width:112px !important;
+            max-width:none !important;
+            height:44px !important;
+            min-height:44px !important;
+            padding:0 19px !important;
+            margin:0 !important;
+            flex:0 0 auto !important;
+            border:1px solid rgba(232,189,104,.55) !important;
+            border-radius:999px !important;
+            background:linear-gradient(135deg,rgba(232,189,104,.19),rgba(112,153,210,.14)) !important;
+            color:#f5d58f !important;
+            font-family:'Vazirmatn',sans-serif !important;
+            font-size:.86rem !important;
+            font-weight:800 !important;
+            line-height:1 !important;
+            white-space:nowrap !important;
+            box-shadow:0 8px 24px rgba(0,0,0,.18),inset 0 1px rgba(255,255,255,.12) !important;
+            cursor:pointer !important;
+            transition:transform .22s ease,background .22s ease,border-color .22s ease,box-shadow .22s ease !important;
+        }
+        .login-topbar-actions .language-toggle::before {
+            content:"\\f0ac";
+            font-family:"Font Awesome 6 Free";
+            font-weight:900;
+            font-size:.95rem;
+            line-height:1;
+        }
+        .login-topbar-actions .language-toggle:hover {
+            transform:translateY(-2px) !important;
+            border-color:rgba(245,213,143,.9) !important;
+            background:linear-gradient(135deg,rgba(232,189,104,.3),rgba(112,153,210,.2)) !important;
+            box-shadow:0 12px 28px rgba(0,0,0,.24),0 0 0 3px rgba(232,189,104,.08) !important;
+        }
+        .login-topbar-actions .language-toggle:focus-visible {
+            outline:3px solid rgba(232,189,104,.45) !important;
+            outline-offset:3px !important;
+        }
+        @media(max-width:600px) {
+            .login-topbar { align-items:center !important; }
+            .login-topbar-actions { gap:7px !important; }
+            .login-topbar-actions .language-toggle {
+                min-width:96px !important;
+                height:40px !important;
+                min-height:40px !important;
+                padding:0 13px !important;
+                font-size:.8rem !important;
+            }
+        }
 </style>
     <script>
         function switchTab(tabId) {
@@ -2541,8 +2649,7 @@ def library_page():
           <div class="library-card-icon"><i class="fas fa-book-open"></i></div>
           <h2>مسئولان کتابخانه</h2>
           <div class="library-names">
-            <div><span>۰۱</span><strong>سبحان علیزاده</strong></div>
-            <div><span>۰۲</span><strong>پرهام قاسم‌نژاد</strong></div>
+            <div><span>۰۱</span><strong>پرهام قاسم‌نژاد</strong></div>
           </div>
           <p>با همراهی و تلاش این دو عزیز، کتابخانه آریو پویاتر و منظم‌تر می‌شود.</p>
         </div>
@@ -2904,3 +3011,5 @@ if __name__ == '__main__':
         print('WARNING: Set a strong SECRET_KEY environment variable before public deployment.')
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
+
+#31pSFCljugtCt1ai
