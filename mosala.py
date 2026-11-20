@@ -2,6 +2,9 @@ import json
 import base64
 import os
 import tempfile
+import sqlite3
+import secrets
+import hmac
 from datetime import datetime
 from urllib.parse import urlparse
 from flask import Flask, render_template_string, request, redirect, url_for, session, abort, Response
@@ -41,6 +44,50 @@ def ario_image(name):
 app.secret_key = os.environ.get('SECRET_KEY', 'CHANGE-THIS-SECRET-KEY-BEFORE-DEPLOYMENT')
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_FILE = os.path.join(BASE_DIR, 'school_data.json')
+
+PRESENCE_DB = os.path.join(BASE_DIR, 'ario_presence.sqlite3')
+ONLINE_WINDOW_SECONDS = 75
+
+
+def _presence_db():
+    """Open the shared SQLite presence store (works across workers on one host)."""
+    conn = sqlite3.connect(PRESENCE_DB, timeout=8)
+    conn.execute('PRAGMA busy_timeout = 8000')
+    conn.execute("CREATE TABLE IF NOT EXISTS active_users (presence_key TEXT PRIMARY KEY, username TEXT NOT NULL, role TEXT NOT NULL DEFAULT '', page TEXT NOT NULL DEFAULT '/', last_seen REAL NOT NULL)")
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_active_users_last_seen ON active_users(last_seen)')
+    return conn
+
+
+ADMIN_ROLES = ('مدیر سایت (شما)', 'مدیر مدرسه')
+PRIMARY_ADMIN_USERNAME = 'admin'
+
+
+def _is_school_admin():
+    return ('username' in session and session.get('role') in ADMIN_ROLES)
+
+
+def _is_primary_admin():
+    # Only the original admin account may grant or revoke administrator access.
+    return (session.get('username') == PRIMARY_ADMIN_USERNAME and
+            session.get('role') == 'مدیر سایت (شما)')
+
+
+def _valid_admin_csrf():
+    expected = session.get('_admin_csrf_token', '')
+    supplied = request.form.get('csrf_token', '')
+    return bool(expected and supplied and hmac.compare_digest(expected, supplied))
+
+
+def _remove_user_presence(username):
+    if not username:
+        return
+    try:
+        with _presence_db() as conn:
+            conn.execute('DELETE FROM active_users WHERE username = ?', (str(username),))
+    except sqlite3.Error:
+        # Presence is an auxiliary feature; logout must still succeed if its store is unavailable.
+        pass
+
 
 
 def safe_html(value):
@@ -131,7 +178,25 @@ def save_data(data):
     finally:
         if os.path.exists(temp_path):
             os.remove(temp_path)
-        # ==========================================
+
+
+@app.before_request
+def _sync_authenticated_user_role():
+    """Keep active sessions in sync with promoted, demoted, or deleted accounts."""
+    username = session.get('username')
+    if not username:
+        return
+    try:
+        account = load_data().get('users', {}).get(username)
+    except (OSError, ValueError, TypeError):
+        account = None
+    if not account:
+        session.clear()
+        return
+    session['role'] = account.get('role', 'دانش‌آموز')
+
+
+# ==========================================
 # قالب پایه (تم روشن + ریسپانسیو + افکت شیشه‌ای)
 # ==========================================
 BASE_TEMPLATE = """
@@ -1365,7 +1430,7 @@ body[data-theme="light"] .inner-page>.values-row>article>p{color:#5d6d86!importa
                 <div class="ario-language-panel-heading"><div><strong>زبان سایت</strong><small>زبان دلخواهت را پیدا کن</small></div><span class="ario-language-count">۱۰۴ زبان</span></div>
                 <label class="ario-language-search"><i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i><input type="search" data-language-search placeholder="جست‌وجوی زبان، نام یا کد..." autocomplete="off" aria-label="جست‌وجوی زبان"></label>
                 <div class="ario-language-results" data-language-results role="listbox" aria-label="زبان‌های قابل انتخاب"></div>
-                <div class="ario-language-footer"><i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i><span data-language-status aria-live="polite">ترجمهٔ خودکار صفحه · زبان اصلی فارسی</span></div>
+                <div class="ario-language-footer"><i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i><span data-language-status aria-live="polite">ترجمهٔ خودکار کل صفحه · زبان اصلی فارسی</span></div>
               </section>
               <div class="ario-gtranslate-widget" aria-hidden="true"></div>
             </div>
@@ -1431,6 +1496,116 @@ window.gtranslateSettings = {
   "wrapper_selector": ".ario-gtranslate-widget",
   "native_language_names": true
 };
+</script>
+<script>
+/* Ario GTranslate interaction safety patch.
+   GTranslate's current dropdown asset can pass a DOM Event into its lazy-loader
+   as if it were a callback on pointerenter/focusin. This shim removes that
+   incompatible Event argument only for its hidden widget wrapper. */
+(function () {
+  if (window.__arioGTranslateSafetyPatch) return;
+  window.__arioGTranslateSafetyPatch = true;
+
+  try {
+    var nativeAdd = EventTarget.prototype.addEventListener;
+    EventTarget.prototype.addEventListener = function (type, listener, options) {
+      var targetIsGTranslate = this && this.classList && (
+        this.classList.contains('ario-gtranslate-widget') ||
+        (this.closest && this.closest('.ario-gtranslate-widget'))
+      );
+      if (targetIsGTranslate && (type === 'pointerenter' || type === 'focusin') && typeof listener === 'function') {
+        var source = '';
+        try { source = Function.prototype.toString.call(listener); } catch (_) {}
+        if ((listener.name === 'load_tlib' || /load_tlib/.test(source)) && !listener.__arioSafeWrapped) {
+          var safeListener = function () { return listener.call(this); };
+          safeListener.__arioSafeWrapped = true;
+          return nativeAdd.call(this, type, safeListener, options);
+        }
+      }
+      return nativeAdd.call(this, type, listener, options);
+    };
+  } catch (error) {
+    /* The visual and overlay safeguards below still work if this browser
+       does not allow EventTarget patching. */
+  }
+
+  var safetyStyle = document.createElement('style');
+  safetyStyle.id = 'ario-gtranslate-click-safety';
+  safetyStyle.textContent = `
+    html body { top:0 !important; }
+    iframe.goog-te-banner-frame, .goog-te-banner-frame,
+    #goog-gt-tt, .goog-te-balloon-frame, .goog-te-menu-frame,
+    .goog-te-spinner-pos, .gt_black_overlay, .gt_white_content {
+      display:none !important; visibility:hidden !important;
+      pointer-events:none !important; max-height:0 !important;
+    }
+    body > .skiptranslate > iframe { display:none !important; visibility:hidden !important; pointer-events:none !important; }
+    .ario-language-header {
+      position:sticky !important; z-index:2147483000 !important;
+      overflow:visible !important; isolation:isolate !important;
+    }
+    .login-topbar.ario-language-header { position:relative !important; }
+    .ario-language-header .ario-language-picker {
+      position:relative !important; z-index:2147483001 !important;
+      pointer-events:auto !important;
+    }
+    .ario-language-panel {
+      z-index:2147483647 !important; pointer-events:auto !important;
+      touch-action:pan-y !important;
+    }
+    .ario-language-panel * { pointer-events:auto !important; }
+    .ario-gtranslate-widget { pointer-events:none !important; }
+  `;
+  (document.head || document.documentElement).appendChild(safetyStyle);
+
+  var blockedSelectors = [
+    'iframe.goog-te-banner-frame', '.goog-te-banner-frame', '#goog-gt-tt',
+    '.goog-te-balloon-frame', '.goog-te-menu-frame', '.goog-te-spinner-pos',
+    '.gt_black_overlay', '.gt_white_content'
+  ].join(',');
+  function neutralizeTranslationOverlays(root) {
+    if (!root || root.nodeType !== 1) return;
+    if (root.matches && root.matches(blockedSelectors)) {
+      root.style.setProperty('display', 'none', 'important');
+      root.style.setProperty('visibility', 'hidden', 'important');
+      root.style.setProperty('pointer-events', 'none', 'important');
+    }
+    if (root.querySelectorAll) {
+      root.querySelectorAll(blockedSelectors).forEach(function (node) {
+        node.style.setProperty('display', 'none', 'important');
+        node.style.setProperty('visibility', 'hidden', 'important');
+        node.style.setProperty('pointer-events', 'none', 'important');
+      });
+    }
+    if (document.body) document.body.style.setProperty('top', '0px', 'important');
+  }
+  function markLanguageHeaders() {
+    document.querySelectorAll('[data-ario-language-picker]').forEach(function (picker) {
+      var header = picker.closest('header');
+      if (header) header.classList.add('ario-language-header');
+    });
+  }
+  function prepare() {
+    markLanguageHeaders();
+    neutralizeTranslationOverlays(document.documentElement);
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', prepare, {once:true});
+  } else {
+    prepare();
+  }
+  if (window.MutationObserver && document.documentElement) {
+    var observer = new MutationObserver(function (records) {
+      records.forEach(function (record) {
+        record.addedNodes.forEach(function (node) {
+          if (node.nodeType === 1) neutralizeTranslationOverlays(node);
+        });
+      });
+      markLanguageHeaders();
+    });
+    observer.observe(document.documentElement, {childList:true, subtree:true});
+  }
+})();
 </script>
 <script src="https://cdn.gtranslate.net/widgets/latest/dropdown.js" defer></script>
 <script>
@@ -1586,34 +1761,81 @@ window.gtranslateSettings = {
       document.body.classList.toggle("language-rtl", direction === "rtl");
     }
   }
-  function applyWithGTranslate(code, attempt=0) {
-    const command = "fa|" + code;
-    try {
-      // Prefer the real dropdown created by the current GTranslate widget.
-      // This avoids relying on legacy Google Website Translator internals.
-      const select = $(".ario-gtranslate-widget select");
-      if (select) {
-        const option = Array.from(select.options).find(item => item.value === command || item.value === code || item.value.endsWith("|" + code));
-        if (option) {
-          select.value = option.value;
-          select.dispatchEvent(new Event("change", {bubbles:true}));
-          const status = $$("[data-language-status]");
-          status.forEach(node => node.textContent = code === "fa" ? "زبان اصلی فارسی فعال است." : "زبان انتخاب‌شده: " + (byCode.get(code)?.persian || code));
-          return;
+  let gtEnginePromise = null;
+
+  function setTranslationStatus(message) {
+    $$('[data-language-status]').forEach(node => { node.textContent = message; });
+  }
+
+  // Load the translation engine explicitly: the custom language picker is
+  // separate from the hidden GTranslate widget, so its hover-triggered lazy
+  // loader may never run by itself.
+  function loadGTranslateEngine() {
+    if (window.__GT) return Promise.resolve(true);
+    if (gtEnginePromise) return gtEnginePromise;
+
+    gtEnginePromise = new Promise((resolve, reject) => {
+      let script = window.gt_translate_script;
+      if (!script || script.dataset.arioLoadFailed === 'true') {
+        script = document.createElement('script');
+        script.src = 'https://cdn.gtranslate.net/widgets/latest/lib.min.js';
+        script.async = true;
+        script.dataset.arioGtranslateEngine = 'true';
+        window.gt_translate_script = script;
+      }
+
+      let settled = false;
+      const finish = (error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeoutId);
+        if (error) {
+          script.dataset.arioLoadFailed = 'true';
+          reject(error);
+        } else {
+          script.dataset.arioLoaded = 'true';
+          resolve(true);
         }
+      };
+      const timeoutId = setTimeout(() => finish(new Error('GTranslate engine timeout')), 12000);
+      script.addEventListener('load', () => finish(null), {once:true});
+      script.addEventListener('error', () => finish(new Error('GTranslate engine could not be loaded')), {once:true});
+
+      if (!script.isConnected) document.head.appendChild(script);
+      else if (window.__GT || script.dataset.arioLoaded === 'true') finish(null);
+
+      const checkReady = () => {
+        if (settled) return;
+        if (window.__GT) finish(null);
+        else setTimeout(checkReady, 180);
+      };
+      checkReady();
+    }).catch(error => {
+      gtEnginePromise = null;
+      throw error;
+    });
+    return gtEnginePromise;
+  }
+
+  async function applyWithGTranslate(code) {
+    const selected = byCode.get(code);
+    setTranslationStatus(code === 'fa'
+      ? 'در حال بازگرداندن زبان اصلی فارسی…'
+      : 'در حال بارگذاری موتور ترجمه برای ' + (selected?.persian || code) + '…');
+    try {
+      await loadGTranslateEngine();
+      if (typeof window.doGTranslate !== 'function') {
+        throw new Error('GTranslate switch function is unavailable');
       }
-      // Compatibility fallback for widget builds that expose this public helper.
-      if (typeof window.doGTranslate === "function") {
-        window.doGTranslate(command);
-        const status = $$("[data-language-status]");
-        status.forEach(node => node.textContent = code === "fa" ? "زبان اصلی فارسی فعال است." : "زبان انتخاب‌شده: " + (byCode.get(code)?.persian || code));
-        return;
-      }
-    } catch (error) { /* Retry after the translation widget finishes loading. */ }
-    if (attempt < 32) {
-      setTimeout(() => applyWithGTranslate(code, attempt + 1), 250);
-    } else {
-      $$("[data-language-status]").forEach(node => node.textContent = "سرویس ترجمه بارگذاری نشد؛ اتصال اینترنت یا دسترسی به سرویس ترجمه را بررسی کنید.");
+      window.doGTranslate('fa|' + code);
+      setTranslationStatus(code === 'fa'
+        ? 'زبان اصلی فارسی فعال شد.'
+        : 'درخواست ترجمه به ' + (selected?.persian || code) + ' ارسال شد. اگر متن‌ها تغییر نکردند، دسترسی هاست به سرویس ترجمه را بررسی کنید.');
+      return true;
+    } catch (error) {
+      console.warn('[Ario language] Translation could not be started:', error);
+      setTranslationStatus('ترجمه اجرا نشد؛ دسترسی مرورگر و هاست به cdn.gtranslate.net و سرویس ترجمه را بررسی کنید.');
+      return false;
     }
   }
 
@@ -1639,6 +1861,8 @@ window.gtranslateSettings = {
     const search = $("[data-language-search]", root);
     const results = $("[data-language-results]", root);
     if (!trigger || !panel || !search || !results) return;
+    const languageHeader = root.closest("header");
+    if (languageHeader) languageHeader.classList.add("ario-language-header");
     renderLanguages(root);
     trigger.addEventListener("click", () => {
       const opening = panel.hidden;
@@ -1789,6 +2013,50 @@ html[lang="ar"] .signature-home>.home-bottom-cta,html[lang="ar"] .inner-page>.st
 html[lang="ar"] body,html[lang="ar"] body *{font-family:'ArioNotoArabic',Tahoma,Arial,sans-serif}
 </style>
 
+<script id="ario-live-presence-heartbeat">
+(function () {
+  if (window.__arioPresenceStarted) return;
+  window.__arioPresenceStarted = true;
+  let clientId = '';
+  try {
+    clientId = sessionStorage.getItem('ario_presence_tab_id') || '';
+    if (!clientId) {
+      clientId = (window.crypto && crypto.randomUUID)
+        ? crypto.randomUUID()
+        : ('tab-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2));
+      sessionStorage.setItem('ario_presence_tab_id', clientId);
+    }
+  } catch (e) {
+    clientId = 'tab-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
+  }
+  async function pingArioPresence() {
+    try {
+      await fetch('/presence/heartbeat', {
+        method: 'POST',
+        credentials: 'same-origin',
+        cache: 'no-store',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({client_id: clientId, page: window.location.pathname}),
+        keepalive: true
+      });
+    } catch (e) { /* temporary network loss: next heartbeat will retry */ }
+  }
+  pingArioPresence();
+  window.setInterval(pingArioPresence, 20000);
+  document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState === 'visible') pingArioPresence();
+  });
+  document.querySelectorAll('a[href="/logout"]').forEach(function (link) {
+    link.addEventListener('click', function () {
+      try {
+        const body = new Blob([JSON.stringify({client_id: clientId})], {type: 'application/json'});
+        if (navigator.sendBeacon) navigator.sendBeacon('/presence/leave', body);
+      } catch (e) { /* stale entry expires automatically */ }
+    });
+  });
+  window.addEventListener('pageshow', function () { pingArioPresence(); });
+})();
+</script>
 </body>
 </html>
 """
@@ -2301,7 +2569,7 @@ html[lang="en"] .login-topbar-actions { margin-left:auto; }
                 <div class="ario-language-panel-heading"><div><strong>زبان سایت</strong><small>زبان دلخواهت را پیدا کن</small></div><span class="ario-language-count">۱۰۴ زبان</span></div>
                 <label class="ario-language-search"><i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i><input type="search" data-language-search placeholder="جست‌وجوی زبان، نام یا کد..." autocomplete="off" aria-label="جست‌وجوی زبان"></label>
                 <div class="ario-language-results" data-language-results role="listbox" aria-label="زبان‌های قابل انتخاب"></div>
-                <div class="ario-language-footer"><i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i><span data-language-status aria-live="polite">ترجمهٔ خودکار صفحه · زبان اصلی فارسی</span></div>
+                <div class="ario-language-footer"><i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i><span data-language-status aria-live="polite">ترجمهٔ خودکار کل صفحه · زبان اصلی فارسی</span></div>
               </section>
               <div class="ario-gtranslate-widget" aria-hidden="true"></div>
             </div>
@@ -2403,6 +2671,116 @@ window.gtranslateSettings = {
   "wrapper_selector": ".ario-gtranslate-widget",
   "native_language_names": true
 };
+</script>
+<script>
+/* Ario GTranslate interaction safety patch.
+   GTranslate's current dropdown asset can pass a DOM Event into its lazy-loader
+   as if it were a callback on pointerenter/focusin. This shim removes that
+   incompatible Event argument only for its hidden widget wrapper. */
+(function () {
+  if (window.__arioGTranslateSafetyPatch) return;
+  window.__arioGTranslateSafetyPatch = true;
+
+  try {
+    var nativeAdd = EventTarget.prototype.addEventListener;
+    EventTarget.prototype.addEventListener = function (type, listener, options) {
+      var targetIsGTranslate = this && this.classList && (
+        this.classList.contains('ario-gtranslate-widget') ||
+        (this.closest && this.closest('.ario-gtranslate-widget'))
+      );
+      if (targetIsGTranslate && (type === 'pointerenter' || type === 'focusin') && typeof listener === 'function') {
+        var source = '';
+        try { source = Function.prototype.toString.call(listener); } catch (_) {}
+        if ((listener.name === 'load_tlib' || /load_tlib/.test(source)) && !listener.__arioSafeWrapped) {
+          var safeListener = function () { return listener.call(this); };
+          safeListener.__arioSafeWrapped = true;
+          return nativeAdd.call(this, type, safeListener, options);
+        }
+      }
+      return nativeAdd.call(this, type, listener, options);
+    };
+  } catch (error) {
+    /* The visual and overlay safeguards below still work if this browser
+       does not allow EventTarget patching. */
+  }
+
+  var safetyStyle = document.createElement('style');
+  safetyStyle.id = 'ario-gtranslate-click-safety';
+  safetyStyle.textContent = `
+    html body { top:0 !important; }
+    iframe.goog-te-banner-frame, .goog-te-banner-frame,
+    #goog-gt-tt, .goog-te-balloon-frame, .goog-te-menu-frame,
+    .goog-te-spinner-pos, .gt_black_overlay, .gt_white_content {
+      display:none !important; visibility:hidden !important;
+      pointer-events:none !important; max-height:0 !important;
+    }
+    body > .skiptranslate > iframe { display:none !important; visibility:hidden !important; pointer-events:none !important; }
+    .ario-language-header {
+      position:sticky !important; z-index:2147483000 !important;
+      overflow:visible !important; isolation:isolate !important;
+    }
+    .login-topbar.ario-language-header { position:relative !important; }
+    .ario-language-header .ario-language-picker {
+      position:relative !important; z-index:2147483001 !important;
+      pointer-events:auto !important;
+    }
+    .ario-language-panel {
+      z-index:2147483647 !important; pointer-events:auto !important;
+      touch-action:pan-y !important;
+    }
+    .ario-language-panel * { pointer-events:auto !important; }
+    .ario-gtranslate-widget { pointer-events:none !important; }
+  `;
+  (document.head || document.documentElement).appendChild(safetyStyle);
+
+  var blockedSelectors = [
+    'iframe.goog-te-banner-frame', '.goog-te-banner-frame', '#goog-gt-tt',
+    '.goog-te-balloon-frame', '.goog-te-menu-frame', '.goog-te-spinner-pos',
+    '.gt_black_overlay', '.gt_white_content'
+  ].join(',');
+  function neutralizeTranslationOverlays(root) {
+    if (!root || root.nodeType !== 1) return;
+    if (root.matches && root.matches(blockedSelectors)) {
+      root.style.setProperty('display', 'none', 'important');
+      root.style.setProperty('visibility', 'hidden', 'important');
+      root.style.setProperty('pointer-events', 'none', 'important');
+    }
+    if (root.querySelectorAll) {
+      root.querySelectorAll(blockedSelectors).forEach(function (node) {
+        node.style.setProperty('display', 'none', 'important');
+        node.style.setProperty('visibility', 'hidden', 'important');
+        node.style.setProperty('pointer-events', 'none', 'important');
+      });
+    }
+    if (document.body) document.body.style.setProperty('top', '0px', 'important');
+  }
+  function markLanguageHeaders() {
+    document.querySelectorAll('[data-ario-language-picker]').forEach(function (picker) {
+      var header = picker.closest('header');
+      if (header) header.classList.add('ario-language-header');
+    });
+  }
+  function prepare() {
+    markLanguageHeaders();
+    neutralizeTranslationOverlays(document.documentElement);
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', prepare, {once:true});
+  } else {
+    prepare();
+  }
+  if (window.MutationObserver && document.documentElement) {
+    var observer = new MutationObserver(function (records) {
+      records.forEach(function (record) {
+        record.addedNodes.forEach(function (node) {
+          if (node.nodeType === 1) neutralizeTranslationOverlays(node);
+        });
+      });
+      markLanguageHeaders();
+    });
+    observer.observe(document.documentElement, {childList:true, subtree:true});
+  }
+})();
 </script>
 <script src="https://cdn.gtranslate.net/widgets/latest/dropdown.js" defer></script>
 <script>
@@ -2558,34 +2936,81 @@ window.gtranslateSettings = {
       document.body.classList.toggle("language-rtl", direction === "rtl");
     }
   }
-  function applyWithGTranslate(code, attempt=0) {
-    const command = "fa|" + code;
-    try {
-      // Prefer the real dropdown created by the current GTranslate widget.
-      // This avoids relying on legacy Google Website Translator internals.
-      const select = $(".ario-gtranslate-widget select");
-      if (select) {
-        const option = Array.from(select.options).find(item => item.value === command || item.value === code || item.value.endsWith("|" + code));
-        if (option) {
-          select.value = option.value;
-          select.dispatchEvent(new Event("change", {bubbles:true}));
-          const status = $$("[data-language-status]");
-          status.forEach(node => node.textContent = code === "fa" ? "زبان اصلی فارسی فعال است." : "زبان انتخاب‌شده: " + (byCode.get(code)?.persian || code));
-          return;
+  let gtEnginePromise = null;
+
+  function setTranslationStatus(message) {
+    $$('[data-language-status]').forEach(node => { node.textContent = message; });
+  }
+
+  // Load the translation engine explicitly: the custom language picker is
+  // separate from the hidden GTranslate widget, so its hover-triggered lazy
+  // loader may never run by itself.
+  function loadGTranslateEngine() {
+    if (window.__GT) return Promise.resolve(true);
+    if (gtEnginePromise) return gtEnginePromise;
+
+    gtEnginePromise = new Promise((resolve, reject) => {
+      let script = window.gt_translate_script;
+      if (!script || script.dataset.arioLoadFailed === 'true') {
+        script = document.createElement('script');
+        script.src = 'https://cdn.gtranslate.net/widgets/latest/lib.min.js';
+        script.async = true;
+        script.dataset.arioGtranslateEngine = 'true';
+        window.gt_translate_script = script;
+      }
+
+      let settled = false;
+      const finish = (error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeoutId);
+        if (error) {
+          script.dataset.arioLoadFailed = 'true';
+          reject(error);
+        } else {
+          script.dataset.arioLoaded = 'true';
+          resolve(true);
         }
+      };
+      const timeoutId = setTimeout(() => finish(new Error('GTranslate engine timeout')), 12000);
+      script.addEventListener('load', () => finish(null), {once:true});
+      script.addEventListener('error', () => finish(new Error('GTranslate engine could not be loaded')), {once:true});
+
+      if (!script.isConnected) document.head.appendChild(script);
+      else if (window.__GT || script.dataset.arioLoaded === 'true') finish(null);
+
+      const checkReady = () => {
+        if (settled) return;
+        if (window.__GT) finish(null);
+        else setTimeout(checkReady, 180);
+      };
+      checkReady();
+    }).catch(error => {
+      gtEnginePromise = null;
+      throw error;
+    });
+    return gtEnginePromise;
+  }
+
+  async function applyWithGTranslate(code) {
+    const selected = byCode.get(code);
+    setTranslationStatus(code === 'fa'
+      ? 'در حال بازگرداندن زبان اصلی فارسی…'
+      : 'در حال بارگذاری موتور ترجمه برای ' + (selected?.persian || code) + '…');
+    try {
+      await loadGTranslateEngine();
+      if (typeof window.doGTranslate !== 'function') {
+        throw new Error('GTranslate switch function is unavailable');
       }
-      // Compatibility fallback for widget builds that expose this public helper.
-      if (typeof window.doGTranslate === "function") {
-        window.doGTranslate(command);
-        const status = $$("[data-language-status]");
-        status.forEach(node => node.textContent = code === "fa" ? "زبان اصلی فارسی فعال است." : "زبان انتخاب‌شده: " + (byCode.get(code)?.persian || code));
-        return;
-      }
-    } catch (error) { /* Retry after the translation widget finishes loading. */ }
-    if (attempt < 32) {
-      setTimeout(() => applyWithGTranslate(code, attempt + 1), 250);
-    } else {
-      $$("[data-language-status]").forEach(node => node.textContent = "سرویس ترجمه بارگذاری نشد؛ اتصال اینترنت یا دسترسی به سرویس ترجمه را بررسی کنید.");
+      window.doGTranslate('fa|' + code);
+      setTranslationStatus(code === 'fa'
+        ? 'زبان اصلی فارسی فعال شد.'
+        : 'درخواست ترجمه به ' + (selected?.persian || code) + ' ارسال شد. اگر متن‌ها تغییر نکردند، دسترسی هاست به سرویس ترجمه را بررسی کنید.');
+      return true;
+    } catch (error) {
+      console.warn('[Ario language] Translation could not be started:', error);
+      setTranslationStatus('ترجمه اجرا نشد؛ دسترسی مرورگر و هاست به cdn.gtranslate.net و سرویس ترجمه را بررسی کنید.');
+      return false;
     }
   }
 
@@ -2611,6 +3036,8 @@ window.gtranslateSettings = {
     const search = $("[data-language-search]", root);
     const results = $("[data-language-results]", root);
     if (!trigger || !panel || !search || !results) return;
+    const languageHeader = root.closest("header");
+    if (languageHeader) languageHeader.classList.add("ario-language-header");
     renderLanguages(root);
     trigger.addEventListener("click", () => {
       const opening = panel.hidden;
@@ -2719,12 +3146,111 @@ def register():
 
 @app.route('/logout')
 def logout():
+    # The active browser tab removes only its own presence row via pagehide/sendBeacon.
+    # Other devices using the same account remain correctly marked online.
     session.clear()
     return redirect(url_for('index'))
 
 # ==========================================
 # صفحات سایت
 # ==========================================
+
+@app.route('/presence/heartbeat', methods=['POST'])
+def presence_heartbeat():
+    """Record an authenticated browser tab as active; no IP or sensitive data is stored."""
+    username = session.get('username')
+    if not username:
+        return Response(json.dumps({'success': False, 'reason': 'login_required'}),
+                        status=401, mimetype='application/json',
+                        headers={'Cache-Control': 'no-store'})
+
+    payload = request.get_json(silent=True) or {}
+    client_id = str(payload.get('client_id', ''))[:100]
+    if not client_id or any(ch not in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-.' for ch in client_id):
+        client_id = secrets.token_urlsafe(18)
+    page = str(payload.get('page', '/'))[:180]
+    if not page.startswith('/') or page.startswith('//'):
+        page = '/'
+    now_ts = datetime.now().timestamp()
+    presence_key = f"{username}:{client_id}"
+    try:
+        with _presence_db() as conn:
+            conn.execute("INSERT INTO active_users(presence_key, username, role, page, last_seen) VALUES (?, ?, ?, ?, ?) ON CONFLICT(presence_key) DO UPDATE SET username=excluded.username, role=excluded.role, page=excluded.page, last_seen=excluded.last_seen",
+                (presence_key, str(username)[:80], str(session.get('role', ''))[:80], page, now_ts))
+            conn.execute('DELETE FROM active_users WHERE last_seen < ?', (now_ts - 600,))
+    except sqlite3.Error:
+        return Response(json.dumps({'success': False, 'reason': 'presence_store_unavailable'}),
+                        status=503, mimetype='application/json',
+                        headers={'Cache-Control': 'no-store'})
+    return Response(json.dumps({'success': True}, ensure_ascii=False), mimetype='application/json',
+                    headers={'Cache-Control': 'no-store'})
+
+
+@app.route('/presence/leave', methods=['POST'])
+def presence_leave():
+    username = session.get('username')
+    if not username:
+        return Response('', status=204, headers={'Cache-Control': 'no-store'})
+    payload = request.get_json(silent=True) or {}
+    client_id = str(payload.get('client_id', ''))[:100]
+    allowed = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-.'
+    if not client_id or any(ch not in allowed for ch in client_id):
+        return Response('', status=204, headers={'Cache-Control': 'no-store'})
+    try:
+        with _presence_db() as conn:
+            conn.execute('DELETE FROM active_users WHERE presence_key = ?', (f"{username}:{client_id}",))
+    except sqlite3.Error:
+        pass
+    return Response('', status=204, headers={'Cache-Control': 'no-store'})
+
+
+@app.route('/admin/online-users')
+def admin_online_users():
+    """Private live-presence feed. Only school administrators can read usernames."""
+    if not _is_school_admin():
+        return Response(json.dumps({'success': False, 'error': 'forbidden'}),
+                        status=403, mimetype='application/json',
+                        headers={'Cache-Control': 'no-store'})
+    now_ts = datetime.now().timestamp()
+    page_titles = {
+        '/home': 'صفحه خانه', '/about': 'درباره ما', '/staff': 'کادر مدرسه',
+        '/activities': 'فعالیت‌ها', '/library': 'کتابخانه', '/news': 'اخبار',
+        '/contact': 'تماس با مدرسه', '/admin': 'پنل مدیریت'
+    }
+    try:
+        with _presence_db() as conn:
+            conn.execute('DELETE FROM active_users WHERE last_seen < ?', (now_ts - 600,))
+            rows = conn.execute('SELECT username, role, page, last_seen FROM active_users WHERE last_seen >= ? ORDER BY last_seen DESC',
+                (now_ts - ONLINE_WINDOW_SECONDS,)).fetchall()
+    except sqlite3.Error:
+        return Response(json.dumps({'success': False, 'error': 'presence_store_unavailable'}),
+                        status=503, mimetype='application/json',
+                        headers={'Cache-Control': 'no-store'})
+
+    grouped = {}
+    for uname, role, page, last_seen in rows:
+        item = grouped.get(uname)
+        if item is None:
+            grouped[uname] = {
+                'username': uname,
+                'role': role,
+                'page': page_titles.get(page, page),
+                'last_seen_seconds': max(0, int(now_ts - last_seen)),
+                'sessions': 1
+            }
+        else:
+            item['sessions'] += 1
+    users = sorted(grouped.values(), key=lambda item: item['last_seen_seconds'])
+    result = {
+        'success': True,
+        'online_count': len(users),
+        'active_sessions': len(rows),
+        'users': users,
+        'updated_at': datetime.now().strftime('%H:%M:%S')
+    }
+    return Response(json.dumps(result, ensure_ascii=False), mimetype='application/json',
+                    headers={'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0'})
+
 
 @app.route('/visitor-stats')
 def visitor_stats():
@@ -3386,6 +3912,91 @@ ADMIN_HTML = BASE_TEMPLATE.replace("{% block content %}{% endblock %}", """
 <div class="container">
     <h1 class="page-title">پنل مدیریت پیشرفته</h1>
     <div class="hero-card" style="margin-bottom:22px;">مدیریت تمام بخش‌های سایت بدون نیاز به کدنویسی</div>
+
+    <!-- کاربران آنلاین، به‌روزرسانی زنده -->
+    <section class="admin-section ario-live-users" aria-live="polite">
+      <style>
+        .ario-live-users{background:linear-gradient(135deg,rgba(13,39,69,.96),rgba(8,23,43,.98))!important;border:1px solid rgba(91,225,190,.23)!important;color:#edf6ff!important;overflow:hidden}
+        .ario-live-users h3{display:flex;align-items:center;gap:12px;color:#f2f7ff!important;border-color:rgba(150,190,230,.17)!important;margin-bottom:14px!important}
+        .ario-live-users .live-pulse{width:10px;height:10px;border-radius:50%;background:#35d39b;box-shadow:0 0 0 5px rgba(53,211,155,.13),0 0 16px rgba(53,211,155,.65);display:inline-block;flex:0 0 auto}
+        .ario-live-users .live-subtitle{color:#a8bad0;font-size:.88rem;line-height:1.9;margin-bottom:20px}
+        .ario-live-users .live-metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:13px;margin-bottom:20px}
+        .ario-live-users .live-metric{padding:17px 20px;border:1px solid rgba(161,193,229,.16);border-radius:17px;background:rgba(255,255,255,.045);display:flex;align-items:center;justify-content:space-between;gap:12px}
+        .ario-live-users .live-metric span{color:#adc0d8;font-size:.82rem}
+        .ario-live-users .live-metric strong{font-size:1.8rem;color:#8cf0cf;font-variant-numeric:tabular-nums}
+        .ario-live-users .live-table-wrap{overflow-x:auto;border:1px solid rgba(161,193,229,.14);border-radius:15px}
+        .ario-live-users table{width:100%;border-collapse:collapse;min-width:540px;color:#e8f0fa}
+        .ario-live-users th,.ario-live-users td{padding:13px 15px;text-align:right;border-bottom:1px solid rgba(161,193,229,.11);font-size:.84rem}
+        .ario-live-users th{background:rgba(255,255,255,.055);color:#a9c1dc;font-weight:750}
+        .ario-live-users tbody tr:last-child td{border-bottom:0}
+        .ario-live-users .online-user-name{font-weight:850;color:#fff}
+        .ario-live-users .online-role{color:#b9c9dc}
+        .ario-live-users .online-badge{display:inline-flex;align-items:center;gap:7px;color:#88edc9;font-size:.78rem;font-weight:800;white-space:nowrap}
+        .ario-live-users .online-badge:before{content:"";width:7px;height:7px;border-radius:50%;background:#35d39b}
+        .ario-live-users .live-footer{display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;margin-top:13px;color:#8ea5c0;font-size:.75rem}
+        .ario-live-users .live-refresh{border:1px solid rgba(157,190,225,.2);background:rgba(255,255,255,.06);color:#eaf3ff;border-radius:10px;padding:8px 13px;font:inherit;cursor:pointer}
+        .ario-live-users .live-empty{padding:22px!important;text-align:center!important;color:#a9bad0}
+        @media(max-width:600px){.ario-live-users{padding:20px!important}.ario-live-users .live-metrics{gap:9px}.ario-live-users .live-metric{padding:13px 12px;align-items:flex-start;flex-direction:column}.ario-live-users .live-metric strong{font-size:1.55rem}.ario-live-users .live-footer{align-items:flex-start;flex-direction:column}}
+      </style>
+      <h3><span class="live-pulse" aria-hidden="true"></span><i class="fas fa-users-viewfinder"></i> کاربران آنلاین در سایت</h3>
+      <p class="live-subtitle">فهرست کاربران واردشده به سایت به‌صورت زنده به‌روزرسانی می‌شود. اگر مرورگر تا حدود ۷۵ ثانیه سیگنال حضور نفرستد، آن حساب از فهرست آنلاین خارج می‌شود.</p>
+      <div class="live-metrics">
+        <div class="live-metric"><span>کاربران آنلاین</span><strong id="arioOnlineUsersCount">۰</strong></div>
+        <div class="live-metric"><span>نشست‌ها / پنجره‌های فعال</span><strong id="arioOnlineSessionsCount">۰</strong></div>
+      </div>
+      <div class="live-table-wrap">
+        <table>
+          <thead><tr><th>نام کاربری</th><th>نقش</th><th>صفحهٔ فعلی</th><th>آخرین سیگنال حضور</th><th>وضعیت</th></tr></thead>
+          <tbody id="arioOnlineUsersBody"><tr><td colspan="5" class="live-empty">در حال دریافت اطلاعات آنلاین‌ها…</td></tr></tbody>
+        </table>
+      </div>
+      <div class="live-footer">
+        <span id="arioOnlineUpdatedAt">در انتظار دریافت داده‌ها…</span>
+        <button class="live-refresh" type="button" id="arioOnlineRefresh"><i class="fas fa-rotate"></i> به‌روزرسانی اکنون</button>
+      </div>
+      <script>
+      (function(){
+        const body=document.getElementById('arioOnlineUsersBody');
+        const usersCount=document.getElementById('arioOnlineUsersCount');
+        const sessionsCount=document.getElementById('arioOnlineSessionsCount');
+        const updated=document.getElementById('arioOnlineUpdatedAt');
+        const refreshButton=document.getElementById('arioOnlineRefresh');
+        if(!body||!usersCount||!sessionsCount)return;
+        const fa=n=>String(n).replace(/[0-9]/g,d=>'۰۱۲۳۴۵۶۷۸۹'[Number(d)]);
+        function cell(tr,value,cls){const td=document.createElement('td');td.textContent=value==null?'—':String(value);if(cls)td.className=cls;tr.appendChild(td);return td;}
+        async function refresh(){
+          if(refreshButton)refreshButton.disabled=true;
+          try{
+            const response=await fetch('/admin/online-users',{credentials:'same-origin',cache:'no-store'});
+            if(!response.ok)throw new Error('HTTP '+response.status);
+            const data=await response.json();
+            if(!data.success)throw new Error('Presence unavailable');
+            usersCount.textContent=fa(data.online_count);
+            sessionsCount.textContent=fa(data.active_sessions);
+            body.replaceChildren();
+            if(!data.users.length){const tr=document.createElement('tr');const td=cell(tr,'هنوز کاربر واردشده‌ای آنلاین نیست.');td.colSpan=5;td.className='live-empty';body.appendChild(tr);}
+            data.users.forEach(user=>{
+              const tr=document.createElement('tr');
+              cell(tr,user.username,'online-user-name');
+              cell(tr,user.role,'online-role');
+              cell(tr,user.page);
+              const seconds=Math.max(0,Number(user.last_seen_seconds)||0);
+              cell(tr,seconds<5?'همین الان':fa(seconds)+' ثانیه پیش');
+              const status=cell(tr,'آنلاین','online-badge');
+              body.appendChild(tr);
+            });
+            if(updated)updated.textContent='آخرین به‌روزرسانی: '+(data.updated_at||'—')+' · تازه‌سازی خودکار هر ۱۰ ثانیه';
+          }catch(error){
+            const tr=document.createElement('tr');const td=cell(tr,'دریافت فهرست آنلاین‌ها ناموفق بود؛ اتصال سرور را بررسی کن.');td.colSpan=5;td.className='live-empty';body.replaceChildren(tr);
+            if(updated)updated.textContent='خطا در دریافت اطلاعات آنلاین‌ها';
+          }finally{if(refreshButton)refreshButton.disabled=false;}
+        }
+        if(refreshButton)refreshButton.addEventListener('click',refresh);
+        refresh();window.setInterval(refresh,10000);
+      })();
+      </script>
+    </section>
+
     <section class="admin-kpi-grid">
       <article><span>کاربران سامانه</span><strong>{{ data.users|length }}</strong><small>حساب‌های ثبت‌شده</small></article>
       <article><span>اعضای کادر</span><strong>{{ data.sections.staff|length }}</strong><small>معرفی‌شده در سایت</small></article>
@@ -3395,40 +4006,124 @@ ADMIN_HTML = BASE_TEMPLATE.replace("{% block content %}{% endblock %}", """
     
     {% if msg %}<div style="background: #d1fae5; color: #065f46; padding: 15px; border-radius: 10px; margin-bottom: 20px; text-align: center; font-weight: bold;">{{ msg }}</div>{% endif %}
 
-    <!-- مدیریت کاربران -->
-    <div class="admin-section" style="border: 2px solid #3b82f6;">
-        <h3><i class="fas fa-users-cog"></i> مدیریت کاربران (ادمین‌ها و معلم‌ها)</h3>
-        <form action="/admin/add_user" method="POST" class="admin-form">
-            <input type="text" name="username" placeholder="نام کاربری جدید" required style="flex: 1;">
-            <input type="password" name="password" placeholder="رمز عبور" required style="flex: 1;">
-            <select name="role" style="flex: 1;">
-                <option value="مدیر سایت (شما)">مدیر سایت (شما)</option>
-                <option value="مدیر مدرسه">مدیر مدرسه</option>
-                <option value="معلم">معلم</option>
-                <option value="دانش‌آموز">دانش‌آموز</option>
-            </select>
-            <button type="submit" class="btn-success">افزودن کاربر</button>
-        </form>
-        
-        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 10px;">
-            {% for uname, uinfo in data.users.items() %}
-            <div class="admin-list-item" style="margin-bottom: 0;">
-                <div style="display: flex; align-items: center; gap: 10px;">
-                    <i class="fas fa-user-circle" style="color: #3b82f6; font-size: 1.2rem;"></i>
-                    <div>
-                        <strong style="display: block;">{{ uname }}</strong>
-                        <span style="font-size: 0.8rem; color: #64748b;">{{ uinfo.role }}</span>
-                    </div>
-                </div>
-                {% if uname != 'admin' %}
-                <form action="/admin/delete_user/{{ uname }}" method="POST" onsubmit="return confirm('مطمئنی می‌خوای این کاربر رو حذف کنی؟')"><button type="submit" class="btn-danger">حذف</button></form>
+    <!-- مدیریت کامل کاربران -->
+    <section class="admin-section ario-user-management" aria-label="مدیریت همه کاربران">
+      <style>
+        .ario-user-management{border:1px solid rgba(59,130,246,.28)!important;background:linear-gradient(145deg,rgba(16,38,66,.98),rgba(8,22,42,.98))!important;color:#edf5ff!important;border-radius:22px!important;overflow:hidden}
+        .ario-user-management h3{color:#f5f8ff!important;display:flex;align-items:center;gap:10px}
+        .ario-user-management .users-intro{color:#aebed2;font-size:.88rem;line-height:1.9;margin:0 0 18px}
+        .ario-user-management .users-toolbar{display:grid;grid-template-columns:minmax(220px,1fr) minmax(180px,auto);gap:12px;margin:18px 0}
+        .ario-user-management .users-search{width:100%;min-width:0;border:1px solid rgba(162,193,229,.2)!important;background:rgba(255,255,255,.07)!important;color:#fff!important;border-radius:13px!important;padding:13px 15px!important;outline:none}
+        .ario-user-management .users-search::placeholder{color:#a3b6cb}
+        .ario-user-management .users-summary{display:flex;align-items:center;justify-content:center;gap:8px;border:1px solid rgba(162,193,229,.16);background:rgba(255,255,255,.045);border-radius:13px;padding:10px 14px;color:#c3d2e5;font-size:.85rem}
+        .ario-user-management .users-summary strong{color:#8cebd0;font-size:1.15rem}
+        .ario-user-management .user-create-form{display:grid;grid-template-columns:1fr 1fr minmax(150px,.7fr) auto;gap:9px;margin:18px 0 22px;padding:15px;border:1px solid rgba(162,193,229,.14);border-radius:17px;background:rgba(255,255,255,.035)}
+        .ario-user-management .user-create-form input,.ario-user-management .user-create-form select{min-width:0;width:100%;border:1px solid rgba(162,193,229,.2)!important;background:rgba(255,255,255,.08)!important;color:#fff!important;border-radius:11px!important;padding:11px 12px!important}
+        .ario-user-management .user-create-form select option{color:#122033;background:#fff}
+        .ario-user-management .user-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,290px),1fr));gap:11px}
+        .ario-user-management .user-card{display:flex;align-items:center;justify-content:space-between;gap:13px;min-width:0;padding:15px;border:1px solid rgba(162,193,229,.15);border-radius:16px;background:rgba(255,255,255,.045)}
+        .ario-user-management .user-card[hidden]{display:none!important}
+        .ario-user-management .user-card-main{display:flex;align-items:center;gap:11px;min-width:0}
+        .ario-user-management .user-avatar{width:42px;height:42px;display:grid;place-items:center;flex:0 0 auto;border-radius:14px;background:rgba(77,145,218,.16);color:#a9d2ff;font-size:1.2rem}
+        .ario-user-management .user-identity{min-width:0}
+        .ario-user-management .user-identity strong{display:block;max-width:190px;overflow-wrap:anywhere;color:#f7fbff;font-size:.92rem}
+        .ario-user-management .user-role{display:block;margin-top:5px;color:#acbfd5;font-size:.77rem;line-height:1.6}
+        .ario-user-management .user-state{display:inline-flex;align-items:center;gap:6px;margin-top:5px;padding:3px 8px;border-radius:999px;background:rgba(255,255,255,.07);color:#b9cbe0;font-size:.68rem}
+        .ario-user-management .user-state.admin{background:rgba(37,190,145,.12);color:#8cebd0}
+        .ario-user-management .user-state.primary{background:rgba(228,190,117,.13);color:#efd49e}
+        .ario-user-management .user-actions{display:flex;align-items:center;justify-content:flex-end;gap:7px;flex-wrap:wrap;flex:0 0 auto}
+        .ario-user-management .user-action-form{margin:0}
+        .ario-user-management .user-action-btn{border:0;border-radius:10px;padding:9px 11px;font:inherit;font-size:.75rem;font-weight:800;cursor:pointer;white-space:nowrap}
+        .ario-user-management .promote-btn{background:linear-gradient(110deg,#75e5c5,#9bd5ff);color:#09243a}
+        .ario-user-management .demote-btn{background:rgba(245,190,93,.15);border:1px solid rgba(245,190,93,.3);color:#f3d49c}
+        .ario-user-management .delete-btn{background:rgba(248,113,113,.13);border:1px solid rgba(248,113,113,.22);color:#ffb4b4}
+        .ario-user-management .protected-note{font-size:.7rem;color:#8cebd0;white-space:nowrap}
+        .ario-user-management .users-empty{display:none;text-align:center;padding:22px;color:#aebed2;border:1px dashed rgba(162,193,229,.2);border-radius:14px}
+        .ario-user-management .users-empty.show{display:block}
+        .ario-user-management .primary-admin-note{margin-top:15px;padding:12px 14px;border-radius:12px;background:rgba(225,186,109,.08);border:1px solid rgba(225,186,109,.18);color:#e4d0a8;font-size:.78rem;line-height:1.9}
+        @media(max-width:720px){.ario-user-management .users-toolbar{grid-template-columns:1fr}.ario-user-management .user-create-form{grid-template-columns:1fr}.ario-user-management .user-card{align-items:flex-start;flex-direction:column}.ario-user-management .user-actions{width:100%;justify-content:flex-start}.ario-user-management .user-identity strong{max-width:100%}}
+      </style>
+      <h3><i class="fas fa-users-gear" aria-hidden="true"></i> مدیریت همهٔ کاربران</h3>
+      <p class="users-intro">تمام حساب‌های ثبت‌شدهٔ سایت را اینجا ببین، جست‌وجو کن و وضعیت دسترسی آن‌ها را مدیریت کن. مدیر ارتقایافته مانند مدیر مدرسه به امکانات مدیریتی سایت دسترسی کامل دارد.</p>
+
+      <form action="/admin/add_user" method="POST" class="user-create-form">
+        <input type="text" name="username" placeholder="نام کاربری جدید" minlength="3" maxlength="32" required>
+        <input type="password" name="password" placeholder="رمز عبور (حداقل ۶ نویسه)" minlength="6" required>
+        <select name="role" aria-label="نقش کاربر جدید">
+          <option value="دانش‌آموز">دانش‌آموز</option>
+          <option value="معلم">معلم</option>
+        </select>
+        <button type="submit" class="btn-success"><i class="fas fa-user-plus"></i> افزودن کاربر</button>
+      </form>
+
+      <div class="users-toolbar">
+        <input id="arioUserSearch" class="users-search" type="search" placeholder="جست‌وجوی نام کاربری یا نقش…" autocomplete="off" aria-label="جست‌وجوی کاربران">
+        <div class="users-summary">تعداد حساب‌ها: <strong id="arioUserCount">{{ data.users|length }}</strong></div>
+      </div>
+
+      <div class="user-cards" id="arioAllUsersList">
+        {% for uname, uinfo in data.users|dictsort %}
+          {% set user_is_admin = uinfo.role in ['مدیر سایت (شما)', 'مدیر مدرسه'] %}
+          <article class="user-card" data-user-card data-search="{{ (uname ~ ' ' ~ uinfo.role)|lower }}">
+            <div class="user-card-main">
+              <span class="user-avatar"><i class="fas fa-user" aria-hidden="true"></i></span>
+              <div class="user-identity">
+                <strong>{{ uname }}</strong>
+                <span class="user-role">{{ uinfo.role }}</span>
+                {% if uname == 'admin' %}
+                  <span class="user-state primary"><i class="fas fa-shield-halved"></i> مدیر اصلی سایت</span>
+                {% elif user_is_admin %}
+                  <span class="user-state admin"><i class="fas fa-crown"></i> دسترسی مدیریتی</span>
                 {% else %}
-                <span style="font-size: 0.7rem; color: #10b981; font-weight: bold;">اصلی</span>
+                  <span class="user-state"><i class="fas fa-user"></i> حساب عادی</span>
                 {% endif %}
+              </div>
             </div>
-            {% endfor %}
-        </div>
-    </div>
+            {% if can_manage_admins %}
+            <div class="user-actions">
+              {% if uname == 'admin' %}
+                <span class="protected-note"><i class="fas fa-lock"></i> حذف و تغییر نقش غیرفعال</span>
+              {% else %}
+                {% if can_manage_admins and user_is_admin and uinfo.get('role_before_admin') %}
+                  <form class="user-action-form" action="{{ url_for('demote_user', username=uname) }}" method="POST" onsubmit="return confirm('دسترسی مدیریتی این کاربر لغو شود؟')">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <button class="user-action-btn demote-btn" type="submit"><i class="fas fa-user-minus"></i> لغو مدیریت</button>
+                  </form>
+                {% elif can_manage_admins and not user_is_admin %}
+                  <form class="user-action-form" action="{{ url_for('promote_user', username=uname) }}" method="POST" onsubmit="return confirm('این کاربر به مدیر کامل سایت ارتقا پیدا کند؟')">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <button class="user-action-btn promote-btn" type="submit"><i class="fas fa-crown"></i> ارتقا به ادمین</button>
+                  </form>
+                {% endif %}
+                <form class="user-action-form" action="{{ url_for('delete_user', username=uname) }}" method="POST" onsubmit="return confirm('حساب این کاربر برای همیشه حذف شود؟')">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                  <button class="user-action-btn delete-btn" type="submit"><i class="fas fa-trash"></i> حذف کاربر</button>
+                </form>
+              {% endif %}
+            </div>
+            {% endif %}
+          </article>
+        {% endfor %}
+      </div>
+      <div class="users-empty" id="arioUsersNoMatch">کاربری با این عبارت پیدا نشد.</div>
+      <div class="primary-admin-note"><i class="fas fa-shield-halved"></i> حساب «admin» مدیر اصلی است و از طریق پنل قابل حذف یا تنزل رتبه نیست. مدیران ارتقایافته نیز می‌توانند کاربران دیگر را مدیریت کنند؛ اما حساب اصلی از حذف و تغییر نقش محافظت شده است.</div>
+      <script>
+      (function(){
+        const input=document.getElementById('arioUserSearch');
+        const cards=Array.from(document.querySelectorAll('[data-user-card]'));
+        const count=document.getElementById('arioUserCount');
+        const empty=document.getElementById('arioUsersNoMatch');
+        if(!input||!count||!empty)return;
+        function filterUsers(){
+          const q=input.value.trim().toLocaleLowerCase();let visible=0;
+          cards.forEach(card=>{const match=(card.dataset.search||'').toLocaleLowerCase().includes(q);card.hidden=!match;if(match)visible++;});
+          count.textContent=String(visible).replace(/[0-9]/g,d=>'۰۱۲۳۴۵۶۷۸۹'[Number(d)]);
+          empty.classList.toggle('show',visible===0);
+        }
+        input.addEventListener('input',filterUsers);
+      })();
+      </script>
+    </section>
 
     <!-- ویرایش متن‌های اصلی -->
     <div class="admin-section">
@@ -3559,7 +4254,11 @@ def admin():
         try: edit_card = data['sections'][edit_section][int(edit_index)]
         except: pass
 
-    return render_template_string(ADMIN_HTML, data=data, msg=msg, title="پنل ادمین", active_page="admin", edit_card=edit_card, edit_section=edit_section, edit_index=edit_index)
+    csrf_token = session.get('_admin_csrf_token')
+    if not csrf_token:
+        csrf_token = secrets.token_urlsafe(32)
+        session['_admin_csrf_token'] = csrf_token
+    return render_template_string(ADMIN_HTML, data=data, msg=msg, title="پنل ادمین", active_page="admin", edit_card=edit_card, edit_section=edit_section, edit_index=edit_index, is_primary_admin=_is_primary_admin(), can_manage_admins=_is_school_admin(), csrf_token=csrf_token)
 
 @app.route('/admin/update_texts', methods=['POST'])
 def update_texts():
@@ -3646,6 +4345,8 @@ def add_user():
     uname = request.form.get('username', '').strip()
     password = request.form.get('password', '')
     role = request.form.get('role', 'دانش‌آموز')
+    if role not in ('دانش‌آموز', 'معلم'):
+        return redirect(url_for('admin', msg='برای ساخت حساب جدید فقط نقش دانش‌آموز یا معلم قابل انتخاب است؛ ارتقای ادمین از دکمهٔ مخصوص انجام می‌شود.'))
     if len(uname) < 3 or len(uname) > 32 or len(password) < 6:
         return redirect(url_for('admin', msg='نام کاربری باید ۳ تا ۳۲ نویسه و رمز حداقل ۶ نویسه باشد.'))
     if uname in data['users']:
@@ -3655,17 +4356,65 @@ def add_user():
     save_data(data)
     return redirect(url_for('admin', msg='کاربر جدید با موفقیت اضافه شد.'))
 
+@app.route('/admin/promote_user/<username>', methods=['POST'])
+def promote_user(username):
+    if not _is_school_admin():
+        abort(403)
+    if not _valid_admin_csrf():
+        return redirect(url_for('admin', msg='درخواست معتبر نبود؛ صفحه را تازه‌سازی و دوباره تلاش کن.'))
+    if username == PRIMARY_ADMIN_USERNAME or username == session.get('username'):
+        return redirect(url_for('admin', msg='حساب مدیر اصلی قابل ارتقا یا تغییر نقش نیست.'))
+    data = load_data()
+    user = data.get('users', {}).get(username)
+    if not user:
+        return redirect(url_for('admin', msg='کاربر موردنظر پیدا نشد.'))
+    if user.get('role') in ADMIN_ROLES:
+        return redirect(url_for('admin', msg='این کاربر از قبل دسترسی مدیریتی دارد.'))
+    user['role_before_admin'] = user.get('role', 'دانش‌آموز')
+    user['role'] = 'مدیر مدرسه'
+    save_data(data)
+    return redirect(url_for('admin', msg=f'کاربر «{username}» با موفقیت به ادمین کامل ارتقا یافت.'))
+
+
+@app.route('/admin/demote_user/<username>', methods=['POST'])
+def demote_user(username):
+    if not _is_school_admin():
+        abort(403)
+    if not _valid_admin_csrf():
+        return redirect(url_for('admin', msg='درخواست معتبر نبود؛ صفحه را تازه‌سازی و دوباره تلاش کن.'))
+    if username == PRIMARY_ADMIN_USERNAME or username == session.get('username'):
+        return redirect(url_for('admin', msg='نقش مدیر اصلی قابل تغییر نیست.'))
+    data = load_data()
+    user = data.get('users', {}).get(username)
+    if not user or user.get('role') not in ADMIN_ROLES or 'role_before_admin' not in user:
+        return redirect(url_for('admin', msg='امکان بازگرداندن نقش این حساب وجود ندارد.'))
+    previous_role = user.pop('role_before_admin', 'دانش‌آموز')
+    if previous_role in ADMIN_ROLES:
+        previous_role = 'دانش‌آموز'
+    user['role'] = previous_role
+    save_data(data)
+    return redirect(url_for('admin', msg=f'دسترسی مدیریتی کاربر «{username}» لغو شد.'))
+
+
 @app.route('/admin/delete_user/<username>', methods=['POST'])
 def delete_user(username):
-    if session.get('role') not in ["مدیر سایت (شما)", "مدیر مدرسه"]: return redirect(url_for('home'))
-    if username == 'admin':
-        return redirect(url_for('admin', msg='شما نمی‌توانید کاربر اصلی (admin) را حذف کنید!'))
-    
+    if not _is_school_admin():
+        return redirect(url_for('home'))
+    if not _valid_admin_csrf():
+        return redirect(url_for('admin', msg='درخواست حذف معتبر نبود؛ صفحه را تازه‌سازی و دوباره تلاش کن.'))
+    if username == PRIMARY_ADMIN_USERNAME:
+        return redirect(url_for('admin', msg='حساب مدیر اصلی سایت (admin) تحت هیچ شرایطی از پنل حذف نمی‌شود.'))
+    if username == session.get('username'):
+        return redirect(url_for('admin', msg='برای جلوگیری از قفل‌شدن پنل، نمی‌توانی حسابی را که اکنون با آن وارد شده‌ای حذف کنی.'))
+
     data = load_data()
-    if username in data['users']:
+    target = data.get('users', {}).get(username)
+    if target:
         del data['users'][username]
         save_data(data)
-    return redirect(url_for('admin', msg='کاربر حذف شد.'))
+        _remove_user_presence(username)
+        return redirect(url_for('admin', msg='کاربر با موفقیت حذف شد.'))
+    return redirect(url_for('admin', msg='کاربر موردنظر پیدا نشد.'))
 
 
 
@@ -4676,6 +5425,215 @@ BASE_TEMPLATE = BASE_TEMPLATE.replace('</head>', f'''<style id="ario-embedded-ma
 body[data-theme="light"] .contact-page .contact-location-card,body[data-theme="light"] .contact-page .contact-visit-card,body[data-theme="light"] .contact-page .contact-phone-card{{background-image:linear-gradient(145deg,rgba(245,249,255,.91),rgba(235,241,250,.96)),url("{_ario_map_data}")!important}}
 </style></head>''')
 del _ario_roads, _ario_map_svg, _ario_map_data
+
+
+# ==========================================
+# ARIO MOBILE HOTFIX — login + post-login pages
+# This final layer intentionally overrides older overlapping responsive rules.
+# ==========================================
+ARIO_MOBILE_LOGIN_CSS = r"""
+/* Mobile login: one predictable column, full-width form controls and no clipping. */
+html, body { width:100%; min-width:320px; max-width:100%; }
+body { overflow-x:hidden !important; }
+@media (max-width:900px) {
+  .login-topbar {
+    width:calc(100% - 24px) !important;
+    max-width:680px !important;
+    min-width:0 !important;
+    margin:12px auto 0 !important;
+    border-radius:20px !important;
+    flex-wrap:wrap !important;
+    justify-content:center !important;
+    gap:10px !important;
+  }
+  .login-topbar .topbar-caption {
+    min-width:0 !important;
+    max-width:100% !important;
+    justify-content:center !important;
+    text-align:center !important;
+  }
+  .login-topbar-actions {
+    width:100% !important;
+    min-width:0 !important;
+    flex:1 1 100% !important;
+    justify-content:center !important;
+    flex-wrap:wrap !important;
+  }
+  .page {
+    display:flex !important;
+    flex-direction:column !important;
+    align-items:stretch !important;
+    justify-content:flex-start !important;
+    gap:24px !important;
+    width:calc(100% - 28px) !important;
+    max-width:560px !important;
+    min-height:0 !important;
+    height:auto !important;
+    margin:18px auto 0 !important;
+    padding:18px 0 42px !important;
+  }
+  .auth-wrap {
+    order:1 !important;
+    display:block !important;
+    width:100% !important;
+    max-width:none !important;
+    min-width:0 !important;
+    margin:0 !important;
+    justify-self:stretch !important;
+  }
+  .auth-card {
+    display:block !important;
+    width:100% !important;
+    max-width:none !important;
+    min-width:0 !important;
+    margin:0 !important;
+    padding:clamp(20px,5vw,30px) !important;
+    overflow:visible !important;
+  }
+  .auth-card, .auth-card * { box-sizing:border-box !important; }
+  .card-heading, .tabs, .auth-form, .input-shell, .input-shell input, .submit-btn {
+    width:100% !important;
+    max-width:100% !important;
+    min-width:0 !important;
+  }
+  .auth-form.active { display:flex !important; }
+  .input-shell input { height:54px !important; font-size:16px !important; }
+  .intro {
+    order:2 !important;
+    display:block !important;
+    width:100% !important;
+    max-width:100% !important;
+    padding:14px 8px 0 !important;
+    text-align:center !important;
+  }
+  .intro:before { inset:-8px !important; }
+  .intro-copy { max-width:100% !important; }
+  .feature-row { justify-content:center !important; }
+  .visual-card { width:100% !important; max-width:100% !important; margin:20px auto 0 !important; }
+}
+@media (max-width:600px) {
+  .login-topbar { width:calc(100% - 20px) !important; padding:10px !important; }
+  .login-topbar-actions { gap:8px !important; }
+  .login-topbar-actions .language-toggle,
+  .login-topbar-actions .ario-language-trigger { min-width:0 !important; }
+  .page { width:calc(100% - 22px) !important; gap:20px !important; padding-top:14px !important; }
+  .auth-card { padding:21px 16px !important; border-radius:22px 8px 22px 8px !important; }
+  .card-logo { margin-bottom:17px !important; }
+  .card-heading { margin-bottom:19px !important; }
+  .card-heading h2 { font-size:clamp(1.3rem,6vw,1.6rem) !important; line-height:1.55 !important; }
+  .card-heading p { font-size:.82rem !important; }
+  .tabs { margin-bottom:18px !important; }
+  .tab { min-height:46px !important; font-size:.85rem !important; }
+  .auth-form { gap:13px !important; }
+  .input-shell input { height:52px !important; padding-inline:44px !important; }
+  .submit-btn { min-height:52px !important; height:auto !important; padding:13px 12px !important; }
+  .secure-note, .bottom-note { line-height:1.9 !important; }
+  .intro h1 { font-size:clamp(2rem,9vw,2.65rem) !important; line-height:1.42 !important; letter-spacing:-.8px !important; }
+  .feature { flex:1 1 135px !important; justify-content:center !important; }
+}
+"""
+AUTH_HTML = AUTH_HTML.replace("</style>", ARIO_MOBILE_LOGIN_CSS + "\n</style>", 1)
+
+ARIO_MOBILE_SITE_CSS = r"""
+/* Mobile content safety: all post-login sections remain visible even when
+   scroll-reveal/animation APIs are unavailable or delayed on a mobile browser. */
+html, body { max-width:100%; overflow-x:hidden !important; }
+@media (max-width:760px) {
+  body { min-width:320px !important; }
+  main.signature-home {
+    display:block !important;
+    position:relative !important;
+    z-index:2 !important;
+    width:100% !important;
+    min-width:0 !important;
+    height:auto !important;
+    min-height:0 !important;
+    overflow:visible !important;
+    opacity:1 !important;
+    visibility:visible !important;
+    transform:none !important;
+  }
+  .signature-home > *,
+  .signature-home [data-reveal],
+  .signature-home [data-reveal].is-visible {
+    opacity:1 !important;
+    visibility:visible !important;
+    transform:none !important;
+  }
+  .signature-home .signature-hero {
+    display:flex !important;
+    position:relative !important;
+    flex-direction:column !important;
+    justify-content:center !important;
+    align-items:stretch !important;
+    width:calc(100% - 16px) !important;
+    max-width:none !important;
+    height:auto !important;
+    min-height:640px !important;
+    max-height:none !important;
+    margin:8px auto 28px !important;
+    padding:34px 20px 92px !important;
+    overflow:hidden !important;
+  }
+  .signature-home .hero-photo,
+  .signature-home .hero-shade,
+  .signature-home .hero-grain {
+    display:block !important;
+    position:absolute !important;
+    visibility:visible !important;
+  }
+  .signature-home .hero-content {
+    display:block !important;
+    position:relative !important;
+    z-index:10 !important;
+    width:100% !important;
+    max-width:100% !important;
+    opacity:1 !important;
+    visibility:visible !important;
+    transform:none !important;
+  }
+  .signature-home .hero-content h1,
+  .signature-home .hero-content p,
+  .signature-home .hero-overline,
+  .signature-home .hero-cta,
+  .signature-home .hero-cta a {
+    display:block !important;
+    opacity:1 !important;
+    visibility:visible !important;
+  }
+  .signature-home .hero-content h1 { font-size:clamp(2.05rem,9.5vw,2.8rem) !important; line-height:1.5 !important; letter-spacing:-.8px !important; }
+  .signature-home .hero-content p { font-size:.93rem !important; line-height:2 !important; }
+  .signature-home .hero-cta { display:flex !important; flex-direction:column !important; align-items:stretch !important; width:100% !important; gap:10px !important; }
+  .signature-home .hero-cta a { width:100% !important; text-align:center !important; }
+  .signature-home .hero-caption { display:flex !important; visibility:visible !important; opacity:1 !important; }
+  .signature-home > .intro-strip,
+  .signature-home > .home-stats,
+  .signature-home > .editorial-section,
+  .signature-home > .feature-band,
+  .signature-home > .home-bottom-cta {
+    display:block !important;
+    width:calc(100% - 28px) !important;
+    max-width:none !important;
+    margin-left:auto !important;
+    margin-right:auto !important;
+    opacity:1 !important;
+    visibility:visible !important;
+  }
+  .signature-home > .home-stats { display:grid !important; grid-template-columns:repeat(2,minmax(0,1fr)) !important; gap:12px !important; }
+  .signature-home > .home-stats > div { min-width:0 !important; padding:16px 12px !important; }
+  .signature-home > .editorial-section { padding:34px 0 55px !important; }
+  .signature-home .editorial-grid { display:grid !important; grid-template-columns:minmax(0,1fr) !important; gap:16px !important; }
+  .signature-home .editorial-card { display:block !important; width:100% !important; min-width:0 !important; min-height:0 !important; transform:none !important; }
+  .signature-home .editorial-card-image { min-height:190px !important; }
+  .signature-home > .feature-band { display:grid !important; grid-template-columns:minmax(0,1fr) !important; }
+  .signature-home > .home-bottom-cta { display:flex !important; flex-direction:column !important; align-items:stretch !important; gap:14px !important; padding:20px !important; }
+  .signature-home > .home-bottom-cta > * { width:100% !important; min-width:0 !important; }
+  footer { position:relative !important; z-index:1 !important; }
+}
+"""
+BASE_TEMPLATE = BASE_TEMPLATE.replace("</head>", "<style id='ario-mobile-site-hotfix'>" + ARIO_MOBILE_SITE_CSS + "</style>\n</head>", 1)
+del ARIO_MOBILE_LOGIN_CSS, ARIO_MOBILE_SITE_CSS
+
 
 # ==========================================
 # اجرای برنامه (مخصوص رندر و لوکال)
