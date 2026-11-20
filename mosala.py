@@ -2225,6 +2225,12 @@ AUTH_HTML = """
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="theme-color" content="#071426">
+    <link rel="manifest" href="/manifest.webmanifest">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="آریو">
+    <link rel="apple-touch-icon" href="/ario-pwa-icon-192.png">
     <title>ورود به آریو | مدرسه آریو مصلی‌نژاد</title>
     <link href="https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@v33.003/Vazirmatn-font-face.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -2897,6 +2903,7 @@ html[lang="en"] .login-topbar-actions { margin-left:auto; }
     <header class="topbar login-topbar">
         <div class="topbar-caption"><span class="topbar-dot"></span> فضای اختصاصی مدرسه آریو مصلی‌نژاد</div>
         <div class="login-topbar-actions">
+        <button class="ario-auth-install-trigger" type="button" data-ario-install aria-label="نصب برنامه آریو" title="نصب برنامه آریو"><i class="fa-solid fa-mobile-screen-button" aria-hidden="true"></i><span>نصب آریو</span></button>
         <div class="ario-language-picker" data-ario-language-picker>
               <button class="ario-language-trigger" type="button" data-language-trigger aria-expanded="false" aria-haspopup="dialog" aria-label="انتخاب زبان سایت">
                 <i class="fa-solid fa-globe" aria-hidden="true"></i>
@@ -6095,6 +6102,10 @@ ARIO_MOBILE_LOGIN_CSS = r"""
 """
 AUTH_HTML = AUTH_HTML.replace("</style>", ARIO_MOBILE_LOGIN_CSS + "\n</style>", 1)
 
+# One-click PWA install button and install prompt on the login page.
+AUTH_HTML = AUTH_HTML.replace("</style>", "\n.ario-auth-install-trigger{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:40px;padding:9px 13px;border:1px solid rgba(114,223,192,.38);border-radius:13px;background:linear-gradient(135deg,rgba(35,105,125,.42),rgba(24,66,103,.58));color:#eaf8ff;font:800 .78rem 'Vazirmatn',sans-serif;white-space:nowrap;cursor:pointer;box-shadow:0 8px 22px rgba(0,0,0,.12);transition:transform .18s ease,border-color .18s ease,background .18s ease}\n.ario-auth-install-trigger i{color:#72dfc0;font-size:1rem}\n.ario-auth-install-trigger:hover,.ario-auth-install-trigger:focus-visible{transform:translateY(-1px);border-color:#72dfc0;outline:none}\n.ario-auth-install-trigger.is-installable{background:linear-gradient(135deg,#147d75,#17639a);border-color:#72dfc0;box-shadow:0 0 0 3px rgba(114,223,192,.12),0 10px 24px rgba(0,0,0,.18)}\n.ario-auth-install-trigger.is-installed{opacity:.78}\n@media(max-width:760px){.ario-auth-install-trigger{min-height:37px;padding:8px 10px;gap:6px;font-size:.72rem;border-radius:11px}.ario-auth-install-trigger i{font-size:.9rem}}\n@media(max-width:360px){.ario-auth-install-trigger span{display:none}.ario-auth-install-trigger{width:39px;padding:0;flex:0 0 39px}}\n" + "\n</style>", 1)
+AUTH_HTML = AUTH_HTML.replace("</body>", '<script id="ario-auth-pwa-install">\n(function(){\n  \'use strict\';\n  const button=document.querySelector(\'[data-ario-install]\');\n  if(!button)return;\n  let deferredPrompt=null;\n  const isStandalone=()=>window.matchMedia(\'(display-mode: standalone)\').matches||window.navigator.standalone===true;\n  const isIOS=()=>/iphone|ipad|ipod/i.test(navigator.userAgent)&&!window.MSStream;\n  function notice(message){\n    let node=document.getElementById(\'ario-install-notice\');\n    if(!node){node=document.createElement(\'div\');node.id=\'ario-install-notice\';node.setAttribute(\'role\',\'status\');node.setAttribute(\'aria-live\',\'polite\');node.style.cssText=\'position:fixed;z-index:99999;bottom:18px;left:14px;right:14px;max-width:520px;margin:auto;padding:15px 17px;border:1px solid rgba(114,223,192,.35);border-radius:16px;background:#0d2743;color:#f4f8ff;box-shadow:0 18px 50px #0007;font:700 13px/2 Vazirmatn,Tahoma,sans-serif;text-align:center;\';document.body.appendChild(node);}\n    node.textContent=message;node.hidden=false;clearTimeout(notice.timer);notice.timer=setTimeout(()=>{node.hidden=true;},8500);\n  }\n  function markInstalled(){button.classList.remove(\'is-installable\');button.classList.add(\'is-installed\');button.innerHTML=\'<i class="fa-solid fa-circle-check" aria-hidden="true"></i><span>آریو نصب شد</span>\';button.setAttribute(\'aria-label\',\'برنامه آریو نصب شده است\');}\n  if(isStandalone())markInstalled();\n  window.addEventListener(\'beforeinstallprompt\',function(event){event.preventDefault();deferredPrompt=event;button.classList.add(\'is-installable\');button.classList.remove(\'is-installed\');});\n  window.addEventListener(\'appinstalled\',function(){deferredPrompt=null;markInstalled();notice(\'آریو با موفقیت روی دستگاه نصب شد.\');});\n  button.addEventListener(\'click\',function(){\n    if(isStandalone()){notice(\'برنامه آریو روی این دستگاه نصب شده است.\');return;}\n    if(deferredPrompt){\n      const promptEvent=deferredPrompt;deferredPrompt=null;\n      // prompt() must be called directly in the user\'s click handler.\n      const promptResult=promptEvent.prompt();\n      Promise.resolve(promptResult).then(()=>promptEvent.userChoice).then(result=>{\n        if(result&&result.outcome===\'accepted\')markInstalled();\n        else button.classList.remove(\'is-installable\');\n      }).catch(()=>notice(\'پنجره نصب باز نشد. صفحه را تازه\u200cسازی کن و دوباره بزن.\'));\n      return;\n    }\n    if(isIOS()){\n      notice(\'در آیفون، نصب مستقیم با یک دکمه در iOS مجاز نیست؛ در Safari دکمه Share و سپس Add to Home Screen را بزن.\');return;\n    }\n    if(!(\'serviceWorker\' in navigator)||!(location.protocol===\'https:\'||location.hostname===\'localhost\')){\n      notice(\'برای نصب مستقیم، سایت باید با HTTPS و مرورگر سازگار باز شود.\');return;\n    }\n    // Service worker registration is also started on page load below. This branch\n    // covers a first visit where Chromium has not emitted beforeinstallprompt yet.\n    navigator.serviceWorker.register(\'/sw.js\',{scope:\'/\'}).then(()=>{\n      notice(\'آریو برای نصب آماده می\u200cشود. پس از بارگذاری صفحه، دوباره روی «نصب آریو» بزن.\');\n    }).catch(()=>notice(\'آماده\u200cسازی نصب انجام نشد؛ اتصال امن HTTPS و دسترسی هاست را بررسی کن.\'));\n  });\n  if(\'serviceWorker\' in navigator&&(location.protocol===\'https:\'||location.hostname===\'localhost\')){\n    window.addEventListener(\'load\',function(){navigator.serviceWorker.register(\'/sw.js\',{scope:\'/\'}).catch(()=>{});});\n  }\n})();\n</script>' + "\n</body>", 1)
+
 ARIO_MOBILE_SITE_CSS = r"""
 /* Mobile content safety: all post-login sections remain visible even when
    scroll-reveal/animation APIs are unavailable or delayed on a mobile browser. */
@@ -6355,8 +6366,8 @@ def ario_pwa_icon_512():
 @app.route('/manifest.webmanifest')
 def ario_manifest():
     manifest = {
-        'name': 'مدرسه آریو مصلی‌نژاد', 'short_name': 'آریو', 'lang': 'fa', 'dir': 'rtl',
-        'start_url': '/', 'scope': '/', 'display': 'standalone', 'orientation': 'any',
+        'id': '/', 'name': 'مدرسه آریو مصلی‌نژاد', 'short_name': 'آریو', 'lang': 'fa', 'dir': 'rtl',
+        'start_url': '/', 'scope': '/', 'display': 'standalone', 'orientation': 'any', 'prefer_related_applications': False,
         'background_color': '#07182b', 'theme_color': '#0d2743',
         'description': 'سامانه مدرسه آریو؛ یادگیری، دوستی و تجربه',
         'icons': [{'src': '/ario-pwa-icon-192.png', 'sizes': '192x192', 'type': 'image/png', 'purpose': 'any'}, {'src': '/ario-pwa-icon-512.png', 'sizes': '512x512', 'type': 'image/png', 'purpose': 'any maskable'}, {'src': '/ario-pwa-icon.svg', 'sizes': 'any', 'type': 'image/svg+xml', 'purpose': 'any'}]
