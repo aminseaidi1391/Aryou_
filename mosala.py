@@ -259,6 +259,75 @@ BASE_TEMPLATE = """
         footer { width:min(1180px,calc(100% - 36px));margin:0 auto 22px;padding:18px 22px;text-align:center;color:#8298b5;border:1px solid rgba(255,255,255,.09);border-radius:18px;background:rgba(9,24,44,.55);font-size:.78rem; }
         footer strong { color:#b7d0ef; }
         @media(max-width:768px) { .home-kicker { font-size:.74rem; } footer { width:calc(100% - 24px); } }
+
+        /* خوانایی و تم روشن؛ با انتخاب کاربر در تمام صفحات فعال می‌شود */
+        body[data-theme="light"] {
+            color:#24324a!important;
+            background:radial-gradient(ellipse at 10% 8%,#e3f0ff,transparent 36%),
+                       radial-gradient(ellipse at 92% 82%,#e1fbf4,transparent 34%),
+                       linear-gradient(135deg,#f8fbff,#eef4fc 55%,#f8fbff)!important;
+            background-attachment:fixed!important;
+        }
+        body[data-theme="light"]:before { opacity:.22; background-image:linear-gradient(rgba(45,72,110,.055) 1px,transparent 1px),linear-gradient(90deg,rgba(45,72,110,.055) 1px,transparent 1px); }
+        body[data-theme="light"] header { background:rgba(255,255,255,.78)!important;border-color:rgba(116,139,174,.2)!important;box-shadow:0 14px 38px rgba(36,55,86,.08)!important; }
+        body[data-theme="light"] .logo-text { color:#1d2b45!important; }
+        body[data-theme="light"] .logo-text span { color:#71829c!important; }
+        body[data-theme="light"] nav a { color:#53647e!important; }
+        body[data-theme="light"] nav a:hover,body[data-theme="light"] nav a.active { color:#2446a0!important;background:#eaf1ff!important; }
+        body[data-theme="light"] .auth-btns span { color:#60718b!important; }
+        body[data-theme="light"] .btn-outline { color:#3156bd!important;border-color:#b8c8ef!important;background:rgba(255,255,255,.75)!important; }
+        body[data-theme="light"] .page-title { color:#1c3264!important;text-shadow:none!important; }
+        body[data-theme="light"] .hero-card { color:#53627a!important;background:rgba(255,255,255,.76)!important;border-color:rgba(255,255,255,.9)!important;box-shadow:0 18px 45px rgba(40,65,105,.08)!important; }
+        body[data-theme="light"] .card { color:#263550!important;background:rgba(255,255,255,.86)!important;border-color:#e5ebf5!important;box-shadow:0 12px 34px rgba(35,55,90,.07)!important; }
+        body[data-theme="light"] .card h3 { color:#1d3157!important; }
+        body[data-theme="light"] .card p { color:#61718a!important; }
+        body[data-theme="light"] .card i { color:#4166ce!important;background:#edf2ff!important;border-color:#e2e9ff!important; }
+        body[data-theme="light"] .admin-section { color:#2b3b56!important;background:rgba(255,255,255,.88)!important;border-color:#e3eaf4!important;box-shadow:0 12px 34px rgba(35,55,90,.07)!important; }
+        body[data-theme="light"] .admin-section h3 { color:#263f7c!important;border-color:#e5eaf3!important; }
+        body[data-theme="light"] .admin-section h4 { color:#4765b2!important; }
+        body[data-theme="light"] .admin-list-item { color:#33445f!important;background:#f7f9fd!important;border-color:#e4eaf3!important; }
+        body[data-theme="light"] .admin-list-item span,body[data-theme="light"] .form-group label { color:#52627a!important; }
+        body[data-theme="light"] .form-group input,body[data-theme="light"] .form-group textarea,body[data-theme="light"] .form-group select,body[data-theme="light"] .admin-form input,body[data-theme="light"] .admin-form select { color:#263550!important;background:#fff!important;border-color:#dce4f0!important; }
+        body[data-theme="light"] input::placeholder,body[data-theme="light"] textarea::placeholder { color:#9aa8bc!important; }
+        body[data-theme="light"] footer { color:#71819a!important;background:rgba(255,255,255,.72)!important;border-color:#e2eaf4!important; }
+        body[data-theme="light"] footer strong { color:#38518a!important; }
+        body[data-theme="light"] .home-kicker { color:#286f69!important;background:#e8faf6!important;border-color:#c9eee6!important; }
+        .theme-toggle {
+            display:inline-flex;align-items:center;justify-content:center;gap:10px;
+            min-height:44px;padding:7px 13px 7px 9px;border-radius:999px;cursor:pointer;
+            color:#e9f4ff;background:linear-gradient(120deg,rgba(255,255,255,.105),rgba(255,255,255,.045));
+            border:1px solid rgba(255,255,255,.2);font:750 .78rem 'Vazirmatn',sans-serif;
+            white-space:nowrap;transition:background .3s,border-color .3s,box-shadow .3s,transform .3s;
+            box-shadow:inset 0 1px rgba(255,255,255,.08),0 5px 18px rgba(0,0,0,.1);
+        }
+        .theme-toggle:hover { transform:translateY(-1px);border-color:rgba(104,229,210,.55);box-shadow:0 8px 24px rgba(55,190,181,.13); }
+        .theme-toggle .theme-icon {
+            width:29px;height:29px;display:grid;place-items:center;border-radius:50%;
+            color:#082033;background:linear-gradient(145deg,#8af3e4,#8bb5ff);
+            box-shadow:0 3px 10px rgba(85,228,210,.2);font-size:.86rem;
+        }
+        .theme-toggle .theme-label { letter-spacing:-.15px; }
+        .theme-toggle .theme-track {
+            width:34px;height:19px;padding:3px;border-radius:30px;
+            background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.13);
+            display:flex;align-items:center;justify-content:flex-start;transition:.3s;
+        }
+        .theme-toggle .theme-track span {
+            width:11px;height:11px;border-radius:50%;background:#8cebdc;
+            box-shadow:0 0 8px rgba(104,229,210,.5);transition:.3s;
+        }
+        body[data-theme="light"] .theme-toggle {
+            color:#315078;background:linear-gradient(120deg,rgba(255,255,255,.96),rgba(239,246,255,.9));
+            border-color:#dce6f3;box-shadow:inset 0 1px #fff,0 6px 18px rgba(49,75,115,.08);
+        }
+        body[data-theme="light"] .theme-toggle .theme-icon { color:white;background:linear-gradient(145deg,#5d7ee5,#8aa8f6);box-shadow:0 3px 10px rgba(85,120,220,.2); }
+        body[data-theme="light"] .theme-toggle .theme-track { justify-content:flex-end;background:#e8edf8;border-color:#dbe4f2; }
+        body[data-theme="light"] .theme-toggle .theme-track span { background:#718de9;box-shadow:0 0 8px rgba(113,141,233,.35); }
+        @media(max-width:900px) {
+            .theme-toggle { min-height:42px;padding:6px 10px 6px 7px; }
+            .theme-toggle .theme-label { display:inline!important; }
+        }
+
     </style>
 </head>
 <body>
@@ -279,6 +348,7 @@ BASE_TEMPLATE = """
             {% endif %}
         </nav>
         <div class="auth-btns">
+            <button class="theme-toggle" type="button" data-theme-toggle onclick="toggleArioTheme()"><i class="fa-solid fa-sun"></i><span>حالت روشن</span></button>
             {% if session.get('username') %}
                 <span style="font-size: 0.8rem; color: #64748b; align-self: center; margin-left: 10px;">{{ session.get('role') }}</span>
                 <a href="/logout" class="btn-outline" style="color: #ef4444; border-color: #ef4444;">خروج</a>
@@ -289,6 +359,33 @@ BASE_TEMPLATE = """
     </header>
     {% block content %}{% endblock %}
     <footer><strong>آریو مصلی‌نژاد</strong> · جایی برای یادگیری، تجربه و ساختن آینده</footer>
+
+<script>
+(function () {
+    const key = 'ario-color-theme';
+    function applyTheme(theme) {
+        document.body.setAttribute('data-theme', theme);
+        document.querySelectorAll('[data-theme-toggle]').forEach(function (button) {
+            const light = theme === 'light';
+            button.innerHTML = light
+                ? '<span class="theme-icon"><i class="fa-solid fa-moon"></i></span><span class="theme-label">پوسته تیره</span><span class="theme-track"><span></span></span>'
+                : '<span class="theme-icon"><i class="fa-solid fa-sun"></i></span><span class="theme-label">پوسته روشن</span><span class="theme-track"><span></span></span>';
+            button.setAttribute('aria-label', light ? 'فعال‌کردن حالت تیره' : 'فعال‌کردن حالت روشن');
+            button.setAttribute('title', light ? 'فعال‌کردن حالت تیره' : 'فعال‌کردن حالت روشن');
+        });
+    }
+    window.toggleArioTheme = function () {
+        const next = document.body.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
+        try { localStorage.setItem(key, next); } catch (e) {}
+        applyTheme(next);
+    };
+    let saved = 'dark';
+    try { saved = localStorage.getItem(key) || 'dark'; } catch (e) {}
+    applyTheme(saved);
+    document.addEventListener('DOMContentLoaded', function () { applyTheme(saved); });
+})();
+</script>
+
 </body>
 </html>
 """
@@ -465,6 +562,81 @@ AUTH_HTML = """
             .card-heading h2 { font-size:1.55rem; }
         }
         @media(prefers-reduced-motion:reduce) { *,*:before,*:after { animation:none!important;transition:none!important; } }
+
+        body[data-theme="light"] {
+            color:#253550;
+            background:radial-gradient(ellipse at 12% 15%,rgba(113,160,239,.22),transparent 35%),
+                       radial-gradient(ellipse at 86% 82%,rgba(73,198,173,.17),transparent 35%),
+                       linear-gradient(135deg,#f8fbff 0%,#edf4ff 52%,#f5fffc 100%);
+        }
+        body[data-theme="light"]:before { opacity:.25;background-image:linear-gradient(rgba(50,77,115,.05) 1px,transparent 1px),linear-gradient(90deg,rgba(50,77,115,.05) 1px,transparent 1px); }
+        body[data-theme="light"] .topbar { background:rgba(255,255,255,.76);border-color:rgba(110,135,175,.2);box-shadow:0 16px 45px rgba(38,59,95,.09); }
+        body[data-theme="light"] .brand,body[data-theme="light"] .brand-name { color:#1d2c47; }
+        body[data-theme="light"] .brand-name small { color:#7889a2; }
+        body[data-theme="light"] .top-links a { color:#5d6d86; }
+        body[data-theme="light"] .top-links a:hover { color:#233d77;background:rgba(75,111,190,.08); }
+        body[data-theme="light"] .top-links .home-link { color:#3156a0;border-color:#d5e0f2; }
+        body[data-theme="light"] .eyebrow { color:#267d73;background:rgba(57,190,170,.09);border-color:rgba(57,190,170,.23); }
+        body[data-theme="light"] .intro h1 { color:#1c3157; }
+        body[data-theme="light"] .intro-copy { color:#62738d; }
+        body[data-theme="light"] .feature { color:#536681;background:rgba(255,255,255,.65);border-color:rgba(122,146,183,.18); }
+        body[data-theme="light"] .visual-card { background:rgba(255,255,255,.72);border-color:rgba(122,146,183,.2);box-shadow:0 12px 35px rgba(40,65,105,.06); }
+        body[data-theme="light"] .visual-card strong { color:#263b61; }
+        body[data-theme="light"] .visual-card p { color:#71819a; }
+        body[data-theme="light"] .auth-card { background:rgba(255,255,255,.76);border-color:rgba(255,255,255,.95);box-shadow:0 30px 80px rgba(35,57,95,.14),inset 0 1px #fff; }
+        body[data-theme="light"] .card-logo span { color:#61738f; }
+        body[data-theme="light"] .card-heading h2 { color:#1e3153; }
+        body[data-theme="light"] .card-heading p { color:#71819a; }
+        body[data-theme="light"] .tabs { background:#edf2fa; }
+        body[data-theme="light"] .tab { color:#64748d; }
+        body[data-theme="light"] .tab.active { color:#102444; }
+        body[data-theme="light"] .field-label { color:#405574; }
+        body[data-theme="light"] .input-shell input { color:#243550;background:rgba(247,250,255,.96);border-color:#dce5f1; }
+        body[data-theme="light"] .input-shell input::placeholder { color:#9aa8bb; }
+        body[data-theme="light"] .input-shell>i,body[data-theme="light"] .reveal { color:#7d90aa; }
+        body[data-theme="light"] .secure-note { color:#75859b; }
+        body[data-theme="light"] .bottom-note { color:#8795a9; }
+        .login-topbar {
+            width:min(1180px,calc(100% - 64px));min-height:58px;margin:22px auto 0;
+            padding:8px 13px 8px 18px;border-radius:999px;
+            display:flex;align-items:center;justify-content:space-between;gap:16px;
+        }
+        .topbar-caption { display:flex;align-items:center;gap:10px;color:#9fb1ca;font-size:.78rem;font-weight:650; }
+        .topbar-dot { width:8px;height:8px;border-radius:50%;background:#6ee6d3;box-shadow:0 0 12px rgba(110,230,211,.7); }
+        body[data-theme="light"] .topbar-caption { color:#6c7d96; }
+        .login-topbar .theme-toggle { margin-right:0; }
+        @media(max-width:600px) {
+            .login-topbar { width:calc(100% - 28px);margin-top:14px;padding:7px 9px 7px 12px; }
+            .topbar-caption { font-size:.68rem; }
+        }
+
+
+        .theme-toggle {
+            display:inline-flex;align-items:center;justify-content:center;gap:10px;
+            min-height:44px;padding:7px 13px 7px 9px;border-radius:999px;cursor:pointer;
+            color:#e9f4ff;background:linear-gradient(120deg,rgba(255,255,255,.105),rgba(255,255,255,.045));
+            border:1px solid rgba(255,255,255,.2);font:750 .78rem 'Vazirmatn',sans-serif;
+            white-space:nowrap;transition:background .3s,border-color .3s,box-shadow .3s,transform .3s;
+            box-shadow:inset 0 1px rgba(255,255,255,.08),0 5px 18px rgba(0,0,0,.1);
+        }
+        .theme-toggle:hover { transform:translateY(-1px);border-color:rgba(104,229,210,.55);box-shadow:0 8px 24px rgba(55,190,181,.13); }
+        .theme-toggle .theme-icon {
+            width:29px;height:29px;display:grid;place-items:center;border-radius:50%;
+            color:#082033;background:linear-gradient(145deg,#8af3e4,#8bb5ff);
+            box-shadow:0 3px 10px rgba(85,228,210,.2);font-size:.86rem;
+        }
+        .theme-toggle .theme-label { letter-spacing:-.15px; }
+        .theme-toggle .theme-track {
+            width:34px;height:19px;padding:3px;border-radius:30px;
+            background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.13);
+            display:flex;align-items:center;justify-content:flex-start;transition:.3s;
+        }
+        .theme-toggle .theme-track span { width:11px;height:11px;border-radius:50%;background:#8cebdc;box-shadow:0 0 8px rgba(104,229,210,.5);transition:.3s; }
+        body[data-theme="light"] .theme-toggle { color:#315078;background:linear-gradient(120deg,rgba(255,255,255,.96),rgba(239,246,255,.9));border-color:#dce6f3;box-shadow:inset 0 1px #fff,0 6px 18px rgba(49,75,115,.08); }
+        body[data-theme="light"] .theme-toggle .theme-icon { color:white;background:linear-gradient(145deg,#5d7ee5,#8aa8f6);box-shadow:0 3px 10px rgba(85,120,220,.2); }
+        body[data-theme="light"] .theme-toggle .theme-track { justify-content:flex-end;background:#e8edf8;border-color:#dbe4f2; }
+        body[data-theme="light"] .theme-toggle .theme-track span { background:#718de9;box-shadow:0 0 8px rgba(113,141,233,.35); }
+
     </style>
     <script>
         function switchTab(tabId) {
@@ -488,17 +660,13 @@ AUTH_HTML = """
 </head>
 <body>
     <div class="ambient a"></div><div class="ambient b"></div>
-    <header class="topbar">
-        <a class="brand" href="/home">
-            <div class="brand-mark">آ</div>
-            <div class="brand-name">آریو مصلی‌نژاد<small>مدرسه‌ای برای ساختن آینده</small></div>
-        </a>
-        <nav class="top-links">
-            <a href="/home">خانه</a>
-            <a href="/about">درباره مدرسه</a>
-            <a href="/news">تازه‌ها</a>
-            <a class="home-link" href="/home"><i class="fa-solid fa-arrow-up-left-from-circle"></i> بازگشت به سایت</a>
-        </nav>
+    <header class="topbar login-topbar">
+        <div class="topbar-caption"><span class="topbar-dot"></span> فضای اختصاصی مدرسه آریو مصلی‌نژاد</div>
+        <button class="theme-toggle" type="button" data-theme-toggle onclick="toggleArioTheme()">
+            <span class="theme-icon"><i class="fa-solid fa-sun"></i></span>
+            <span class="theme-label">پوسته روشن</span>
+            <span class="theme-track"><span></span></span>
+        </button>
     </header>
 
     <main class="page">
@@ -527,7 +695,7 @@ AUTH_HTML = """
             <div class="auth-card">
                 <div class="card-heading">
                     <div class="card-logo"><div class="brand-mark">آ</div><span>سامانه یکپارچه مدرسه</span></div>
-                    <h2>خوش برگشتی! 👋</h2>
+                    <h2>اینجا شروعِ اتفاق‌های بزرگه ✨</h2>
                     <p>برای ادامه مسیر، وارد حساب کاربری‌ات شو یا حساب جدید بساز.</p>
                 </div>
                 <div class="tabs">
@@ -556,6 +724,33 @@ AUTH_HTML = """
             </div>
         </section>
     </main>
+
+<script>
+(function () {
+    const key = 'ario-color-theme';
+    function applyTheme(theme) {
+        document.body.setAttribute('data-theme', theme);
+        document.querySelectorAll('[data-theme-toggle]').forEach(function (button) {
+            const light = theme === 'light';
+            button.innerHTML = light
+                ? '<i class="fa-solid fa-moon"></i><span>حالت تیره</span>'
+                : '<i class="fa-solid fa-sun"></i><span>حالت روشن</span>';
+            button.setAttribute('aria-label', light ? 'فعال‌کردن حالت تیره' : 'فعال‌کردن حالت روشن');
+            button.setAttribute('title', light ? 'فعال‌کردن حالت تیره' : 'فعال‌کردن حالت روشن');
+        });
+    }
+    window.toggleArioTheme = function () {
+        const next = document.body.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
+        try { localStorage.setItem(key, next); } catch (e) {}
+        applyTheme(next);
+    };
+    let saved = 'dark';
+    try { saved = localStorage.getItem(key) || 'dark'; } catch (e) {}
+    applyTheme(saved);
+    document.addEventListener('DOMContentLoaded', function () { applyTheme(saved); });
+})();
+</script>
+
 </body>
 </html>
 """
