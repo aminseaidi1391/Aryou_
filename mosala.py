@@ -962,6 +962,66 @@ html[lang="en"] .admin-section h3 { text-align:left !important; }
 html[lang="en"] .login-topbar-actions { margin-left:auto; }
 .language-toggle { min-width:78px; }
 
+
+/* ===== FIX: HOME HERO TEXT VISIBILITY / SPACING ===== */
+.signature-home { position:relative; isolation:isolate; }
+.signature-hero {
+    position:relative!important; isolation:isolate!important;
+    min-height:min(820px, calc(100svh - 105px))!important;
+    height:auto!important;
+    padding:clamp(72px, 10vh, 118px) clamp(24px, 8vw, 120px) 112px!important;
+    display:flex!important; align-items:center!important; overflow:hidden!important;
+}
+.signature-hero .hero-photo { z-index:0!important; }
+.signature-hero .hero-shade {
+    z-index:1!important;
+    background:linear-gradient(90deg,rgba(4,12,25,.94) 0%,rgba(4,12,25,.82) 48%,rgba(4,12,25,.42) 100%),
+               linear-gradient(0deg,rgba(4,12,25,.64),rgba(4,12,25,.08) 65%)!important;
+}
+.signature-hero .hero-grain { z-index:1!important; }
+.signature-hero .hero-content {
+    display:block!important; position:relative!important; z-index:5!important;
+    width:min(100%,850px)!important; max-width:850px!important; margin:0!important;
+    opacity:1!important; visibility:visible!important; transform:none!important;
+    text-align:right!important;
+}
+.signature-hero .hero-overline {
+    position:relative!important; z-index:6!important; color:#f0d7a8!important;
+    opacity:1!important; visibility:visible!important; line-height:2!important;
+}
+.signature-hero .hero-content h1 {
+    display:block!important; position:relative!important; z-index:6!important;
+    color:#fff!important; font-size:clamp(2.45rem,6.1vw,5.6rem)!important;
+    line-height:1.45!important; letter-spacing:-1.5px!important; font-weight:950!important;
+    margin:24px 0 22px!important; opacity:1!important; visibility:visible!important;
+    text-shadow:0 4px 24px rgba(0,0,0,.48)!important; overflow:visible!important;
+}
+.signature-hero .hero-content h1 em {
+    display:inline!important; color:#f0d7a8!important;
+    -webkit-text-fill-color:#f0d7a8!important; font-style:normal!important;
+}
+.signature-hero .hero-content p {
+    display:block!important; position:relative!important; z-index:6!important;
+    max-width:650px!important; color:#f1f4f8!important;
+    font-size:clamp(.98rem,1.35vw,1.13rem)!important; line-height:2.15!important;
+    margin:0!important; opacity:1!important; visibility:visible!important;
+    text-shadow:0 2px 12px rgba(0,0,0,.5)!important;
+}
+.signature-hero .hero-cta { position:relative!important; z-index:6!important; margin-top:30px!important; }
+.signature-hero .hero-caption,.signature-hero .hero-scroll { z-index:6!important; }
+@media(max-width:850px) {
+ .signature-hero { min-height:690px!important; padding:80px 34px 115px!important; }
+ .signature-hero .hero-content h1 { font-size:clamp(2.5rem,8vw,4.5rem)!important; line-height:1.5!important; }
+}
+@media(max-width:600px) {
+ .signature-hero { min-height:720px!important; padding:74px 23px 120px!important; }
+ .signature-hero .hero-content { width:100%!important; }
+ .signature-hero .hero-content h1 { font-size:2.55rem!important; line-height:1.55!important; letter-spacing:-1px!important; margin:22px 0 18px!important; }
+ .signature-hero .hero-content p { font-size:.94rem!important; line-height:2!important; }
+ .signature-hero .hero-overline { font-size:.66rem!important; letter-spacing:1px!important; flex-wrap:wrap; }
+ .signature-hero .hero-caption { bottom:22px!important; }
+}
+
 </style>
 </head>
 <body>
@@ -1200,7 +1260,6 @@ html[lang="en"] .login-topbar-actions { margin-left:auto; }
     "کتاب": "Book",
     "مدرسه": "School",
     "جام": "Trophy",
-    "در حال ویرایش کارت: {{ edit_card.title }}": "Editing card: {{ edit_card.title }}",
     "لیست تمام کارت‌ها": "All Cards",
     "صفحه خانه (Home)": "Home Page",
     "کادر مدرسه (Staff)": "School Team",
@@ -2074,7 +2133,6 @@ html[lang="en"] .login-topbar-actions { margin-left:auto; }
     "کتاب": "Book",
     "مدرسه": "School",
     "جام": "Trophy",
-    "در حال ویرایش کارت: {{ edit_card.title }}": "Editing card: {{ edit_card.title }}",
     "لیست تمام کارت‌ها": "All Cards",
     "صفحه خانه (Home)": "Home Page",
     "کادر مدرسه (Staff)": "School Team",
