@@ -13,6 +13,127 @@ from flask import Flask, render_template_string, request, redirect, url_for, ses
 from werkzeug.security import generate_password_hash, check_password_hash
 from markupsafe import escape
 
+
+# Persian/Jalali date utilities (pure Python; no extra package required).
+_ARIO_DIGITS_ASCII = str.maketrans('۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩', '01234567890123456789')
+_ARIO_DIGITS_PERSIAN = str.maketrans('0123456789', '۰۱۲۳۴۵۶۷۸۹')
+
+
+def _ario_gregorian_to_jalali(gy, gm, gd):
+    """Convert a Gregorian date to Jalali. Uses the well-known 33-year cycle algorithm."""
+    leap_gregorian = (gy % 4 == 0 and (gy % 100 != 0 or gy % 400 == 0))
+    g_month_days = [31, 29 if leap_gregorian else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    gy2 = gy - 1600
+    gm2 = gm - 1
+    g_day_no = 365 * gy2 + (gy2 + 3) // 4 - (gy2 + 99) // 100 + (gy2 + 399) // 400
+    g_day_no += sum(g_month_days[:gm2]) + gd - 1
+    j_day_no = g_day_no - 79
+    j_np = j_day_no // 12053
+    j_day_no %= 12053
+    jy = 979 + 33 * j_np + 4 * (j_day_no // 1461)
+    j_day_no %= 1461
+    if j_day_no >= 366:
+        jy += (j_day_no - 1) // 365
+        j_day_no = (j_day_no - 1) % 365
+    if j_day_no < 186:
+        jm = 1 + j_day_no // 31
+        jd = 1 + j_day_no % 31
+    else:
+        jm = 7 + (j_day_no - 186) // 30
+        jd = 1 + (j_day_no - 186) % 30
+    return jy, jm, jd
+
+
+def _ario_jalali_to_gregorian(jy, jm, jd):
+    """Convert a Jalali date to Gregorian; caller validates the round-trip."""
+    jy -= 979
+    j_day_no = 365 * jy + (jy // 33) * 8 + ((jy % 33 + 3) // 4)
+    j_day_no += (jm - 1) * 31 if jm < 7 else 186 + (jm - 7) * 30
+    j_day_no += jd - 1
+    g_day_no = j_day_no + 79
+    gy = 1600 + 400 * (g_day_no // 146097)
+    g_day_no %= 146097
+    leap = True
+    if g_day_no >= 36525:
+        g_day_no -= 1
+        gy += 100 * (g_day_no // 36524)
+        g_day_no %= 36524
+        if g_day_no >= 365:
+            g_day_no += 1
+        else:
+            leap = False
+    gy += 4 * (g_day_no // 1461)
+    g_day_no %= 1461
+    if g_day_no >= 366:
+        leap = False
+        g_day_no -= 1
+        gy += g_day_no // 365
+        g_day_no %= 365
+    gd = g_day_no + 1
+    g_month_days = [31, 29 if leap else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
+    gm = 1
+    while gm <= 12 and gd > g_month_days[gm - 1]:
+        gd -= g_month_days[gm - 1]
+        gm += 1
+    return gy, gm, gd
+
+
+def _ario_parse_school_date(value, default=None):
+    """Accept Shamsi YYYY/MM/DD or legacy Gregorian YYYY-MM-DD and return ISO date."""
+    raw = str(value or '').strip().translate(_ARIO_DIGITS_ASCII)
+    if not raw:
+        return default
+    match = re.fullmatch(r'(\d{4})\s*[/.-]\s*(\d{1,2})\s*[/.-]\s*(\d{1,2})', raw)
+    if not match:
+        return default
+    year, month, day = map(int, match.groups())
+    try:
+        if year >= 1700:
+            parsed = datetime(year, month, day)
+            return parsed.strftime('%Y-%m-%d')
+        if 1200 <= year <= 1600:
+            gy, gm, gd = _ario_jalali_to_gregorian(year, month, day)
+            parsed = datetime(gy, gm, gd)
+            if _ario_gregorian_to_jalali(gy, gm, gd) != (year, month, day):
+                return default
+            return parsed.strftime('%Y-%m-%d')
+    except (ValueError, OverflowError):
+        return default
+    return default
+
+
+def _ario_persian_digits(value):
+    return str(value).translate(_ARIO_DIGITS_PERSIAN)
+
+
+def _ario_shamsi_date(value):
+    """Render ISO/Gregorian or Jalali date/timestamp as Persian YYYY/MM/DD."""
+    if value is None:
+        return ''
+    raw = str(value).strip()
+    if not raw:
+        return ''
+    match = re.match(r'^(\d{4})[-/](\d{1,2})[-/](\d{1,2})(.*)$', raw.translate(_ARIO_DIGITS_ASCII))
+    if not match:
+        return _ario_persian_digits(raw)
+    year, month, day = map(int, match.groups()[:3])
+    suffix = match.group(4) or ''
+    try:
+        if year >= 1700:
+            jy, jm, jd = _ario_gregorian_to_jalali(year, month, day)
+        elif 1200 <= year <= 1600:
+            # Already Jalali: validate it before formatting.
+            gy, gm, gd = _ario_jalali_to_gregorian(year, month, day)
+            if _ario_gregorian_to_jalali(gy, gm, gd) != (year, month, day):
+                return _ario_persian_digits(raw)
+            jy, jm, jd = year, month, day
+        else:
+            return _ario_persian_digits(raw)
+        return _ario_persian_digits(f'{jy:04d}/{jm:02d}/{jd:02d}{suffix}')
+    except (ValueError, OverflowError, IndexError):
+        return _ario_persian_digits(raw)
+
+
 app = Flask(__name__)
 
 ARIO_DEVICE_COOKIE = 'ario_device_id'
@@ -134,6 +255,71 @@ def localized_value(item, field, default=''):
     """Keep Persian as the canonical source; client-side translation handles all target languages."""
     return item.get(field, default)
 
+
+def _ario_normalize_news_title(value):
+    """Normalize Persian/Arabic Unicode variants for legacy news-title matching."""
+    return (str(value or '').replace('\u200c', ' ').replace('\u200f', '').replace('\u200e', '')
+            .replace('ي', 'ی').replace('ك', 'ک').casefold().strip())
+
+
+def _is_student_day_news(item):
+    """Identify the old Student Day announcement by its title, in Persian or English."""
+    title_fields = ('title', 'title_fa', 'title_en', 'title_ar')
+    if not isinstance(item, dict):
+        return False
+    for field in title_fields:
+        title = _ario_normalize_news_title(item.get(field, ''))
+        if 'روز دانش آموز' in title or 'student day' in title or "students' day" in title or "student's day" in title:
+            return True
+    return False
+
+
+def _ario_apply_news_replacement(data):
+    """Permanently remove legacy Student Day news and add the requested thank-you post once."""
+    sections = data.setdefault('sections', {})
+    settings = data.setdefault('settings', {})
+    news = sections.setdefault('news', [])
+    if not isinstance(news, list):
+        news = []
+        sections['news'] = news
+    changed = False
+
+    # Remove the old Student Day story from the stored news list, not only from its display.
+    filtered_news = [item for item in news if not _is_student_day_news(item)]
+    if len(filtered_news) != len(news):
+        sections['news'] = filtered_news
+        news = filtered_news
+        changed = True
+
+    migration_key = 'ario_thank_you_news_replacement_v1'
+    if not settings.get(migration_key):
+        already_added = any(
+            item.get('_ario_system_key') == 'ario_school_thank_you_v1'
+            or _ario_normalize_news_title(item.get('title', '')) == _ario_normalize_news_title('پیام سپاس و قدردانی')
+            for item in news if isinstance(item, dict)
+        )
+        if not already_added:
+            try:
+                from zoneinfo import ZoneInfo
+                today_iso = datetime.now(ZoneInfo('Asia/Tehran')).strftime('%Y-%m-%d')
+            except Exception:
+                today_iso = datetime.now().strftime('%Y-%m-%d')
+            news.append({
+                '_ario_system_key': 'ario_school_thank_you_v1',
+                'title': 'پیام سپاس و قدردانی',
+                'text': 'ممنون از همراهی اعضای مدرسه و اعضای آموزشی و اعضای کادر مدرسه.<br><br>ممنون از همراهی شما عزیزان.',
+                'title_en': 'A Message of Appreciation',
+                'text_en': 'Thank you to all school members, educational staff, and school team members.<br><br>Thank you for your support.',
+                'icon': 'fa-heart',
+                'date': today_iso,
+            })
+            changed = True
+        settings[migration_key] = True
+        changed = True
+
+    return changed
+
+
 # ==========================================
 # مدیریت دیتای پویا (شامل کاربران)
 # ==========================================
@@ -154,6 +340,8 @@ def load_data():
                         "admin": {"password": "123", "role": "مدیر سایت (شما)"},
                         "modir": {"password": "123", "role": "مدیر مدرسه"}
                     }
+                if _ario_apply_news_replacement(data):
+                    save_data(data)
                 return data
             except: pass
     
@@ -189,6 +377,7 @@ def load_data():
             ]
         }
     }
+    _ario_apply_news_replacement(default_data)
     save_data(default_data)
     return default_data
 
@@ -2186,8 +2375,8 @@ html[lang="ar"] body,html[lang="ar"] body *{font-family:'ArioNotoArabic',Tahoma,
 
 <div class="ario-search-backdrop" id="arioSearchBackdrop" hidden>
   <section class="ario-search-dialog" role="dialog" aria-modal="true" aria-labelledby="arioSearchTitle">
-    <div class="ario-search-top"><div><strong id="arioSearchTitle">جست‌وجوی هوشمند آریو</strong><small>خبرها، فعالیت‌ها، اعضای کادر و بخش‌های سایت را پیدا کن</small></div><button type="button" class="ario-search-close" data-ario-close-search aria-label="بستن جست‌وجو"><i class="fas fa-xmark"></i></button></div>
-    <label class="ario-search-input-wrap"><i class="fas fa-magnifying-glass"></i><input id="arioGlobalSearchInput" type="search" placeholder="مثلاً: کتابخانه، اخبار، نام دبیر..." autocomplete="off"></label>
+    <div class="ario-search-top"><div><strong id="arioSearchTitle">جست‌وجوی هوشمند آریو</strong><small>کلاس‌ها، خبرها، فعالیت‌ها، اعضای کادر و بخش‌های سایت را پیدا کن</small></div><button type="button" class="ario-search-close" data-ario-close-search aria-label="بستن جست‌وجو"><i class="fas fa-xmark"></i></button></div>
+    <label class="ario-search-input-wrap"><i class="fas fa-magnifying-glass"></i><input id="arioGlobalSearchInput" type="search" placeholder="مثلاً: کلاس نهم ۳، هشتم سه، کتابخانه یا نام دبیر..." autocomplete="off"></label>
     <div class="ario-search-results" id="arioGlobalSearchResults" aria-live="polite"><div class="ario-search-hint">برای شروع، نام یک بخش یا موضوع را جست‌وجو کن.</div></div>
   </section>
 </div>
@@ -3035,7 +3224,7 @@ html[lang="en"] .login-topbar-actions { margin-left:auto; }
                 </form>
                 <form id="form-register" class="auth-form" action="/register" method="POST">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token|default('') }}">
-                    <p class="field-hint" style="line-height:1.9;color:#9fb8d4;font-size:.78rem;margin:0 0 10px">این فرم فقط درخواست ورود به مدرسه است. حساب شما پس از تأیید مدیر فعال می‌شود.</p>
+                    <p class="field-hint" style="line-height:1.9;color:#9fb8d4;font-size:.78rem;margin:0 0 10px">با ثبت این فرم، حساب شما فوراً برای استفاده از بخش‌های عمومی سایت فعال می‌شود. درخواست عضویت کلاسی برای مدیر ارسال می‌شود و امکانات اختصاصی کلاس پس از تأیید او باز خواهد شد.</p>
                     <label class="field-label" for="register-full-name">نام و نام خانوادگی</label>
                     <div class="input-shell"><i class="fa-regular fa-id-card"></i><input id="register-full-name" type="text" name="full_name" placeholder="نام واقعی دانش‌آموز" maxlength="80" required></div>
                     <label class="field-label" for="register-username">نام کاربری دلخواه</label>
@@ -3527,10 +3716,12 @@ def login():
     device_key = _ario_device_key()
     if not user or not pw:
         return render_template_string(AUTH_HTML, error="نام کاربری و رمز عبور را کامل وارد کنید.", show_register=False, csrf_token=_school_csrf())
-    data = load_data()
 
-    if user in data['users']:
-        account = data['users'][user]
+    # _school_load also migrates legacy pending enrollment requests into usable
+    # general-site accounts, while keeping their class access locked.
+    data, _portal = _school_load()
+    account = data.get('users', {}).get(user)
+    if account:
         stored_password = account.get('password', '')
         if isinstance(stored_password, str) and stored_password.startswith(('scrypt:', 'pbkdf2:')):
             password_ok = check_password_hash(stored_password, pw)
@@ -3551,14 +3742,6 @@ def login():
             if role == 'والد':
                 return redirect(url_for('ario_parent_dashboard'))
             return redirect(url_for('home'))
-    else:
-        try:
-            _d, _portal = _school_load()
-            pending = next((r for r in _portal.get('enrollment_requests', []) if r.get('username') == user and r.get('status') == 'pending'), None)
-            if pending and pending.get('password_hash') and check_password_hash(pending['password_hash'], pw):
-                return render_template_string(AUTH_HTML, error="درخواست ورود شما هنوز در انتظار تأیید مدیر مدرسه است.", show_register=False, csrf_token=_school_csrf())
-        except Exception:
-            pass
     return render_template_string(AUTH_HTML, error="نام کاربری یا رمز عبور اشتباه است.", show_register=False, csrf_token=_school_csrf())
 
 @app.route('/register', methods=['POST'])
@@ -3572,6 +3755,7 @@ def register():
         return render_template_string(AUTH_HTML, error="فرم منقضی شده است؛ صفحه را تازه‌سازی و دوباره تلاش کنید.", show_register=True, csrf_token=_school_csrf())
     if len(full_name) < 2 or len(user) < 3 or len(user) > 32 or len(pw) < 8:
         return render_template_string(AUTH_HTML, error="نام و نام خانوادگی، نام کاربری ۳ تا ۳۲ نویسه و رمز حداقل ۸ نویسه لازم است.", show_register=True, csrf_token=_school_csrf())
+
     data, portal = _school_load()
     if class_id not in portal.get('classes', {}):
         return render_template_string(AUTH_HTML, error="لطفاً یکی از کلاس‌های معتبر مدرسه را انتخاب کنید.", show_register=True, csrf_token=_school_csrf())
@@ -3580,14 +3764,38 @@ def register():
     requests_list = portal.setdefault('enrollment_requests', [])
     if any(r.get('username') == user and r.get('status') == 'pending' for r in requests_list):
         return render_template_string(AUTH_HTML, error="برای این نام کاربری یک درخواست در انتظار بررسی وجود دارد.", show_register=True, csrf_token=_school_csrf())
-    # Store only a password hash in the approval queue. No account is created before admin approval.
-    requests_list.append({
-        'id': secrets.token_urlsafe(12), 'username': user, 'full_name': full_name, 'request_message': request_message, 'password_hash': generate_password_hash(pw),
-        'role': 'دانش‌آموز', 'class_id': class_id, 'device_key': _ario_device_key(), 'status': 'pending',
-        'requested_at': datetime.now().strftime('%Y-%m-%d %H:%M')
-    })
+
+    now_label = _school_now().strftime('%Y-%m-%d %H:%M')
+    device_key = _ario_device_key()
+    # Create the account immediately so the student can sign in and use the
+    # general/public school website without waiting. No class assignment or
+    # class-module permission is granted until a manager approves the request.
+    data.setdefault('users', {})[user] = {
+        'password': generate_password_hash(pw),
+        'role': 'دانش‌آموز',
+        'full_name': full_name,
+        'requested_class_id': class_id,
+        'class_access_approved': False,
+        'class_access_status': 'pending',
+        'class_access_requested_at': now_label,
+        'created_at': now_label,
+    }
+    request_record = {
+        'id': secrets.token_urlsafe(12), 'username': user,
+        'full_name': full_name, 'request_message': request_message,
+        'role': 'دانش‌آموز', 'class_id': class_id,
+        'device_key': device_key, 'status': 'pending',
+        'account_precreated': True,
+        'requested_at': now_label,
+    }
+    requests_list.append(request_record)
+    _ario_bind_device_account(portal, user, device_key)
     save_data(data)
-    return render_template_string(AUTH_HTML, success="درخواست ورود شما برای مدیر مدرسه ارسال شد. بعد از تأیید مدیر می‌توانید با همین نام کاربری و رمز وارد شوید.", show_register=False, csrf_token=_school_csrf())
+    return render_template_string(
+        AUTH_HTML,
+        success="حساب شما ساخته شد و می‌توانید همین حالا وارد سایت شوید و از بخش‌های عمومی استفاده کنید. درخواست عضویت کلاسی نیز برای مدیر ارسال شد؛ امتحان‌ها، نمرات، تکالیف، حضور و غیاب و سایر امکانات کلاس پس از تأیید مدیر فعال می‌شوند.",
+        show_register=False, csrf_token=_school_csrf()
+    )
 
 @app.route('/logout')
 def logout():
@@ -3753,9 +3961,15 @@ def home():
     staff_count = len(data['sections'].get('staff', []))
     activity_count = len(data['sections'].get('activities', []))
     news_count = len(data['sections'].get('news', []))
-    latest_news = list(reversed(data['sections'].get('news', [])))[:3]
+    # Legacy Student Day entries are removed from storage by load_data; keep a
+    # defensive filter here so they can never reappear in the homepage preview.
+    latest_news = [
+        item for item in reversed(data['sections'].get('news', []))
+        if not _is_student_day_news(item)
+        and item.get('_ario_system_key') != 'ario_school_thank_you_v1'
+    ][:3]
     news_preview_cards = ''.join(
-        f'<article class="ario-home-news-card"><span class="ario-news-date">{safe_html(item.get("date", "خبر آریو"))}</span><h3>{safe_html(localized_value(item, "title", ""))}</h3><p>{safe_html(localized_value(item, "text", ""))}</p><a href="/news">ادامه خبر <i class="fas fa-arrow-left"></i></a></article>'
+        f'<article class="ario-home-news-card"><span class="ario-news-date">{safe_html(_ario_shamsi_date(item.get("date", "خبر آریو")))}</span><h3>{safe_html(localized_value(item, "title", ""))}</h3><p>{safe_html(localized_value(item, "text", ""))}</p><a href="/news">ادامه خبر <i class="fas fa-arrow-left"></i></a></article>'
         for item in latest_news
     ) or '<div class="ario-news-empty">هنوز خبر تازه‌ای منتشر نشده است.</div>'
     content = f"""
@@ -3836,6 +4050,7 @@ def home():
     # Student daily check-in: prompt once per Tehran school-day after login.
     attendance_layer = ''
     attendance_saved_notice = ''
+    class_access_notice = ''
     if request.args.get('attendance') == 'saved' and session.get('role') == 'دانش‌آموز':
         attendance_saved_notice = '''<div class="ario-checkin-toast" role="status">وضعیت امروزت ثبت شد و برای مدیر و دبیر کلاس قابل مشاهده است.</div>'''
     if session.get('role') == 'دانش‌آموز':
@@ -3844,7 +4059,11 @@ def home():
             student_name = session.get('username', '')
             student_account = school_data.get('users', {}).get(student_name, {})
             student_class_id = student_account.get('school_class_id')
-            if student_class_id in school_portal.get('classes', {}):
+            if not _school_class_access_approved(student_account):
+                requested_class = school_portal.get('classes', {}).get(student_account.get('requested_class_id'), {})
+                requested_label = _school_class_label(requested_class) if requested_class else 'کلاس انتخابی'
+                class_access_notice = f'<div class="ario-pending-class-access" role="status"><strong>درخواست عضویت شما ثبت شده است.</strong><span>می‌توانید از بخش‌های عمومی سایت استفاده کنید. دسترسی به { _school_html(requested_label) } و امکانات کلاسی پس از تأیید مدیر فعال می‌شود.</span><a href="/profile">پیگیری درخواست</a></div>'
+            elif student_class_id in school_portal.get('classes', {}):
                 today_key = _school_now().strftime('%Y-%m-%d')
                 today_record = school_portal.get('attendance', {}).get(today_key, {}).get(student_class_id, {})
                 if student_name not in today_record:
@@ -3861,10 +4080,13 @@ def home():
                     </style>
                     <div class="ario-checkin-overlay" role="dialog" aria-modal="true" aria-labelledby="arioCheckinTitle"><section class="ario-checkin-card"><div class="ario-checkin-icon"><i class="fas fa-calendar-check"></i></div><span class="eyebrow">ARIO · DAILY CHECK-IN</span><h2 id="arioCheckinTitle">سلام {_school_html(visible_name)}!</h2><p>وضعیت امروزت را برای کلاس {_school_html(_school_class_label(school_portal['classes'][student_class_id]))} مشخص کن.</p><form method="post" action="/school/check-in"><input type="hidden" name="csrf_token" value="{_school_html(school_token)}"><div class="ario-checkin-actions"><button class="ario-checkin-present" type="submit" name="status" value="حاضر"><i class="fas fa-check-circle"></i> حاضر هستم</button><button class="ario-checkin-absent" type="submit" name="status" value="غایب"><i class="fas fa-circle-xmark"></i> امروز غایبم</button></div></form><p class="ario-checkin-foot">این ثبت، اعلام وضعیت توسط خود دانش‌آموز است؛ دبیر یا مدیر می‌تواند آن را بررسی و در دفتر رسمی اصلاح کند.</p></section></div>'''
             else:
-                attendance_layer = '''<div class="ario-checkin-toast" role="status">حساب دانش‌آموزی شما هنوز به کلاسی اختصاص داده نشده است. برای فعال‌شدن حضور و غیاب با مدیر مدرسه هماهنگ کنید.</div>'''
+                attendance_layer = ''
         except Exception:
             # Keep the site usable if the optional school data is temporarily unavailable.
             attendance_layer = ''
+    if class_access_notice:
+        pending_style = '<style>.ario-pending-class-access{width:min(1120px,calc(100% - 28px));margin:18px auto;padding:16px 18px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;border:1px solid rgba(114,223,192,.28);border-radius:16px;background:linear-gradient(120deg,rgba(16,57,77,.96),rgba(8,31,52,.96));color:#eaf7ff;box-shadow:0 12px 30px rgba(0,0,0,.12)}.ario-pending-class-access strong{color:#8ce7d1}.ario-pending-class-access span{flex:1;min-width:220px;color:#c0d2e5;font-size:.82rem;line-height:1.9}.ario-pending-class-access a{color:#9cebd8;font-weight:900;text-decoration:none}@media(max-width:600px){.ario-pending-class-access{align-items:flex-start;flex-direction:column}}</style>'
+        content = content.replace('</main>', pending_style + class_access_notice + '</main>', 1)
     content += attendance_saved_notice + attendance_layer
     return render_template_string(BASE_TEMPLATE.replace("{% block content %}{% endblock %}", content).replace("{{ title }}", "خانه").replace("{{ active_page }}", "home"))
 
@@ -4011,7 +4233,7 @@ body[data-theme="light"] .staff-row-copy p,body[data-theme="light"] .contact-edi
 def news_page():
     if 'username' not in session: return redirect(url_for('index'))
     data = load_data()
-    items = list(reversed(data['sections'].get('news', [])))
+    items = [item for item in reversed(data['sections'].get('news', [])) if not _is_student_day_news(item)]
     news_cards = []
     for i,item in enumerate(items):
         news_words = (str(item.get('title', '')) + ' ' + str(item.get('text', ''))).lower()
@@ -4025,7 +4247,7 @@ def news_page():
             image_url = '/ario-image/school_about'
         else:
             image_url = '/ario-image/news_event' if i % 2 == 0 else '/ario-image/activity_robotics'
-        date_html = f'<span class="news-date">{safe_html(item.get("date", "خبر مدرسه"))}</span>'
+        date_html = f'<span class="news-date">{safe_html(_ario_shamsi_date(item.get("date", "خبر مدرسه")))}</span>'
         news_cards.append(f'<article class="journal-row" data-reveal><div class="journal-photo" style="background-image:url(\'{safe_html(image_url)}\')"></div><div class="journal-copy">{date_html}<h3>{safe_html(localized_value(item, "title", ""))}</h3><p>{safe_html(localized_value(item, "text", ""))}</p></div><span class="journal-arrow"><i class="fas fa-arrow-left"></i></span></article>')
     cards_html = ''.join(news_cards)
     content = f"""<main class="inner-page editorial-inner">
@@ -4905,7 +5127,10 @@ def add_news():
     title = request.form.get('title', '').strip()
     body = request.form.get('text', '').strip()
     image_url = request.form.get('image_url', '').strip()
-    date = request.form.get('date', '').strip() or datetime.now().strftime('%Y-%m-%d')
+    date_raw = request.form.get('date', '').strip()
+    date = _ario_parse_school_date(date_raw, default=_school_now().strftime('%Y-%m-%d')) if date_raw else _school_now().strftime('%Y-%m-%d')
+    if date_raw and not _ario_parse_school_date(date_raw):
+        return redirect(url_for('admin', msg='تاریخ خبر را به شمسی و به شکل ۱۴۰۵/۰۸/۳۰ وارد کنید.'))
     parsed = urlparse(image_url) if image_url else None
     if not title or not body:
         return redirect(url_for('admin', msg='عنوان و متن خبر را وارد کنید.'))
@@ -6415,7 +6640,7 @@ def ario_profile():
     for req in reversed(device_requests[-12:]):
         role_label = req.get('role', 'دانش‌آموز')
         status = req.get('status', 'pending')
-        status_label = {'pending': 'در انتظار تأیید مدیر', 'approved': 'تأیید و فعال شد', 'rejected': 'رد شده', 'conflict': 'نیازمند بررسی مدیر'}.get(status, status)
+        status_label = {'pending': 'در انتظار تأیید دسترسی کلاسی', 'approved': 'دسترسی کلاسی فعال شد', 'rejected': 'رد شده', 'conflict': 'نیازمند بررسی مدیر'}.get(status, status)
         class_info = portal.get('classes', {}).get(req.get('class_id'), {})
         class_label = _school_class_label(class_info) if class_info else ('تخصیص کلاس پس از تأیید' if role_label == 'معلم' else 'کلاس انتخاب نشده')
         request_cards.append(f'<div class="ario-device-request"><div><strong>{_school_html(req.get("full_name", req.get("username", "حساب جدید")))}</strong><small>{_school_html(req.get("username", ""))} · {_school_html(role_label)} · {_school_html(class_label)}</small></div><span class="ario-device-request-status">{_school_html(status_label)}</span></div>')
@@ -6476,7 +6701,7 @@ def ario_profile():
 
       <section class="ario-profile-card">
         <div class="ario-account-section-title"><h2>درخواست ساخت حساب جدید</h2><i class="fas fa-paper-plane"></i></div>
-        <p class="ario-account-help">فقط نقش دانش‌آموز یا دبیر قابل درخواست است. درخواست برای مدیر ارسال می‌شود و تا زمان تأیید، حساب فعال نخواهد شد. مدیر اصلی و مدیر مدرسه از این فرم ساخته نمی‌شوند.</p>
+        <p class="ario-account-help">فقط نقش دانش‌آموز یا دبیر قابل درخواست است. حساب بلافاصله برای استفاده از بخش‌های عمومی سایت ساخته می‌شود؛ امکانات اختصاصی کلاس فقط پس از تأیید مدیر فعال خواهد شد. مدیر اصلی و مدیر مدرسه از این فرم ساخته نمی‌شوند.</p>
         <form method="post" action="/profile/add-account" autocomplete="off">
           <input type="hidden" name="csrf_token" value="{safe_html(token)}"><input type="hidden" name="mode" value="request_new">
           <div class="ario-profile-grid">
@@ -6562,15 +6787,26 @@ def ario_profile_add_account():
         if any(r.get('username') == new_username and r.get('status') == 'pending' for r in queue):
             session['_ario_profile_notice'] = 'برای این نام کاربری درخواست در انتظار بررسی وجود دارد.'
             return redirect(url_for('ario_profile'))
+        now_label = _school_now().strftime('%Y-%m-%d %H:%M')
+        data.setdefault('users', {})[new_username] = {
+            'password': generate_password_hash(password), 'role': role,
+            'full_name': full_name,
+            'requested_class_id': class_id if role == 'دانش‌آموز' else '',
+            'class_access_approved': False,
+            'class_access_status': 'pending',
+            'class_access_requested_at': now_label,
+            'created_at': now_label,
+        }
         queue.append({
             'id': secrets.token_urlsafe(12), 'username': new_username,
             'full_name': full_name, 'request_message': request_message,
-            'password_hash': generate_password_hash(password), 'role': role,
-            'class_id': class_id, 'device_key': device_key, 'status': 'pending',
-            'requested_at': datetime.now().strftime('%Y-%m-%d %H:%M')
+            'role': role, 'class_id': class_id, 'device_key': device_key,
+            'status': 'pending', 'account_precreated': True,
+            'requested_at': now_label
         })
+        _ario_bind_device_account(portal, new_username, device_key)
         save_data(data)
-        session['_ario_profile_notice'] = 'درخواست ساخت حساب برای مدیر ارسال شد؛ پس از تأیید، حساب به این دستگاه اضافه می‌شود.'
+        session['_ario_profile_notice'] = 'حساب ساخته شد و به این دستگاه متصل شد. می‌توانی با آن از بخش‌های عمومی سایت استفاده کنی؛ دسترسی کلاس پس از تأیید مدیر فعال می‌شود.'
         return redirect(url_for('ario_profile'))
 
     abort(400)
@@ -6607,7 +6843,9 @@ def ario_site_search():
     query = (request.args.get('q') or '').strip()[:80]
     def normalize(value):
         value = str(value or '').casefold().replace('ي', 'ی').replace('ك', 'ک').replace('‌', ' ').replace('\u200c', ' ')
+        value = value.translate(str.maketrans('۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩', '01234567890123456789'))
         value = re.sub(r'<[^>]*>', ' ', value)
+        value = re.sub(r'[\u064b-\u065f\u0670]', '', value)
         return re.sub(r'\s+', ' ', value).strip()
     q = normalize(query)
     if len(q) < 2:
@@ -6615,6 +6853,7 @@ def ario_site_search():
 
     page_items = [
         ('خانه', 'معرفی مدرسه، مسیرهای سریع و آمار آریو', '/home', 'fa-house'),
+        ('مدرسه‌یار', 'کلاس‌ها، حضور و غیاب، امتحان‌ها و خدمات آموزشی', '/school', 'fa-graduation-cap'),
         ('درباره ما', 'داستان مدرسه، ارزش‌ها و رویکرد آموزشی', '/about', 'fa-school'),
         ('کادر مدرسه', 'مدیر، معاونان و اعضای کادر مدرسه', '/staff', 'fa-users'),
         ('فعالیت‌ها', 'فعالیت‌های آموزشی، هنری و ورزشی', '/activities', 'fa-compass'),
@@ -6655,6 +6894,72 @@ def ario_site_search():
                     break
         if len(results) >= 30:
             break
+
+    # Global search also indexes the actual school classes. Previously the
+    # top-bar search searched public pages and news only, so queries such as
+    # "کلاس نهم ۳" could never return a class even though the school dashboard
+    # had its own separate class filter.
+    # Include school classes in the top-bar/global search (not just in the
+    # separate School Hub filter). Results are permission-scoped: admins see
+    # all classes, teachers see only assigned classes, students only their own.
+    school_data, school_portal = _school_load()
+    class_store = school_portal.get('classes', {})
+    role = session.get('role', '')
+    if isinstance(class_store, dict) and role in ('مدیر سایت (شما)', 'مدیر مدرسه', 'معلم', 'دانش‌آموز'):
+        ignored_class_words = {'کلاس', 'پایه', 'در', 'برای', 'مدرسه', 'آریو'}
+        query_terms = [part for part in re.split(r'[\s،,;:/\-]+', q) if part and part not in ignored_class_words]
+        # A generic "کلاس" query should not dump all records; the user must
+        # include a grade, section or class code.
+        if query_terms:
+            for class_id, cls in class_store.items():
+                if not isinstance(cls, dict) or not _school_can_access_class(school_data, school_portal, class_id, write=False):
+                    continue
+                grade_number = _school_grade_number(cls.get('grade_number'), class_id)
+                grade_name = str(cls.get('grade', '') or '')
+                section = str(cls.get('section', '') or '')
+                digits = section.translate(str.maketrans('۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩', '01234567890123456789'))
+                grade_ascii = str(grade_number) if grade_number in (7, 8, 9) else ''
+                grade_fa = {'7': '۷', '8': '۸', '9': '۹'}.get(grade_ascii, grade_ascii)
+                grade_words = {
+                    '7': 'هفتم هفت هفتمی',
+                    '8': 'هشتم هشت هشتمی',
+                    '9': 'نهم نه نهمی',
+                }.get(grade_ascii, grade_name)
+                section_words = {
+                    '1': 'اول یک اولی یکم',
+                    '2': 'دوم دو دومی دومین',
+                    '3': 'سوم سه سومی سومین',
+                    '4': 'چهارم چهار چهارمی چهارمین',
+                    '5': 'پنجم پنج پنجمی پنجمین',
+                }.get(digits, '')
+                class_aliases = ' '.join((
+                    _school_class_label(cls), f'کلاس {grade_name} {section}',
+                    f'پایه {grade_name} کلاس {section}', f'{grade_name} {section}',
+                    f'{grade_name}{digits}', f'{grade_name}{section}',
+                    f'{grade_words}{digits}', f'{grade_words}{section}',
+                    f'{grade_ascii}-{digits}', f'{grade_fa}-{section}',
+                    f'{grade_ascii}/{digits}', f'{grade_fa}/{section}',
+                    f'{grade_ascii}{digits}', f'{grade_fa}{section}',
+                    f'{grade_words} {section_words}', f'کلاس {grade_words} {section_words}',
+                    f'پایه {grade_words} کلاس {section_words}', class_id,
+                ))
+                indexed_class = normalize(class_aliases)
+                if not all(term in indexed_class for term in query_terms):
+                    continue
+                student_count = len(_school_class_students(school_data, class_id))
+                teacher_count = len(cls.get('teacher_usernames', [])) if isinstance(cls.get('teacher_usernames', []), list) else 0
+                class_title = _school_class_label(cls)
+                snippet = f'فضای کلاس · {student_count} دانش‌آموز · {teacher_count} دبیر · حضور و غیاب، نمرات، تکالیف و برنامه هفتگی'
+                results.append({
+                    'title': class_title,
+                    'category': 'کلاس مدرسه',
+                    'snippet': snippet,
+                    'url': '/school/class/' + str(class_id),
+                    'icon': 'fa-chalkboard-user',
+                })
+                if len(results) >= 30:
+                    break
+
     payload = {'success': True, 'results': results[:30]}
     return Response(json.dumps(payload, ensure_ascii=False), mimetype='application/json', headers={'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0'})
 
@@ -6713,7 +7018,28 @@ SCHOOL_GRADE_CONFIG = (('7', 'هفتم', 4), ('8', 'هشتم', 5), ('9', 'نهم
 SCHOOL_SECTION_DIGITS = ('۱', '۲', '۳', '۴', '۵')
 SCHOOL_DAYS = ('شنبه', 'یکشنبه', 'دوشنبه', 'سه‌شنبه', 'چهارشنبه', 'پنجشنبه', 'جمعه')
 SCHOOL_ATTENDANCE_STATUSES = ('حاضر', 'غایب', 'تأخیر', 'موجه')
+SCHOOL_ABSENCE_CLASSIFICATIONS = ('در انتظار بررسی', 'موجه', 'غیرموجه')
 SCHOOL_TEACHER_LIMIT_PER_CLASS = 13
+
+
+def _school_grade_number(value, class_id=None):
+    """Normalize stored grade values from legacy records to 7/8/9 safely."""
+    text = str(value or '').strip().replace('ي', 'ی').replace('ك', 'ک')
+    text = text.translate(str.maketrans('۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩', '01234567890123456789'))
+    if 'هفتم' in text:
+        return 7
+    if 'هشتم' in text:
+        return 8
+    if 'نهم' in text:
+        return 9
+    match = re.search(r'(?<!\d)(7|8|9)(?!\d)', text)
+    if match:
+        return int(match.group(1))
+    if class_id:
+        match = re.match(r'^\s*(7|8|9)(?:[-_/]|$)', str(class_id))
+        if match:
+            return int(match.group(1))
+    return 99
 
 
 def _school_html(value):
@@ -6722,7 +7048,7 @@ def _school_html(value):
 
 
 def _school_ensure_structure(data):
-    """Add the smart-school data model without overwriting existing school content."""
+    """Ensure the canonical 13 classes exist and normalize legacy metadata without losing class content."""
     changed = False
     portal = data.get('school_portal')
     if not isinstance(portal, dict):
@@ -6734,49 +7060,86 @@ def _school_ensure_structure(data):
         classes = {}
         portal['classes'] = classes
         changed = True
+
+    users = data.get('users')
+    if not isinstance(users, dict):
+        users = {}
+        data['users'] = users
+        changed = True
     for grade_number, grade_name, section_count in SCHOOL_GRADE_CONFIG:
         for section_index, section_digit in enumerate(SCHOOL_SECTION_DIGITS[:section_count], start=1):
             class_id = f'{grade_number}-{section_index}'
-            if class_id not in classes or not isinstance(classes.get(class_id), dict):
-                classes[class_id] = {
-                    'id': class_id,
-                    'grade': grade_name,
-                    'grade_number': int(grade_number),
-                    'section': section_digit,
-                    'teacher_usernames': [],
-                    'timetable': []
-                }
+            cls = classes.get(class_id)
+            if not isinstance(cls, dict):
+                cls = {}
+                classes[class_id] = cls
                 changed = True
-            cls = classes[class_id]
-            defaults = {
+
+            # These fields define the official school structure. Repair blank, stale,
+            # or malformed legacy values, but preserve teachers, timetable and all
+            # other class-specific records already stored in the class dictionary.
+            canonical_fields = {
                 'id': class_id,
                 'grade': grade_name,
                 'grade_number': int(grade_number),
                 'section': section_digit,
-                'teacher_usernames': [],
-                'timetable': []
             }
-            for key, value in defaults.items():
-                if key not in cls:
-                    cls[key] = value
+            for key, expected in canonical_fields.items():
+                if cls.get(key) != expected:
+                    cls[key] = expected
                     changed = True
+
             if not isinstance(cls.get('teacher_usernames'), list):
                 cls['teacher_usernames'] = []
                 changed = True
             if not isinstance(cls.get('timetable'), list):
                 cls['timetable'] = []
                 changed = True
-            # Remove duplicate or stale teacher references safely.
+
+            # Keep only existing teacher accounts with the teacher role; retain order.
             deduped = []
-            for username in cls['teacher_usernames']:
-                if username in data.get('users', {}) and data['users'][username].get('role') == 'معلم' and username not in deduped:
-                    deduped.append(username)
+            for teacher_username in cls['teacher_usernames']:
+                teacher_account = users.get(teacher_username, {})
+                if (isinstance(teacher_account, dict)
+                        and teacher_account.get('role') == 'معلم'
+                        and teacher_username not in deduped):
+                    deduped.append(teacher_username)
+            deduped = deduped[:SCHOOL_TEACHER_LIMIT_PER_CLASS]
             if deduped != cls['teacher_usernames']:
-                cls['teacher_usernames'] = deduped[:SCHOOL_TEACHER_LIMIT_PER_CLASS]
+                cls['teacher_usernames'] = deduped
                 changed = True
-    for key, default in (('attendance', {}), ('grades', []), ('homework', []), ('announcements', []), ('exams', []), ('exam_attempts', []), ('enrollment_requests', []), ('device_accounts', {}), ('parent_links', {})):
+
+    for key, default in (('attendance', {}), ('grades', []), ('homework', []),
+                         ('announcements', []), ('exams', []), ('exam_attempts', []),
+                         ('enrollment_requests', []), ('device_accounts', {}), ('parent_links', {})):
         if not isinstance(portal.get(key), type(default)):
             portal[key] = default
+            changed = True
+
+    # Migrate sign-up requests created by older builds: they used to keep only
+    # a password hash in the queue, preventing login until manager approval.
+    # Turn them into general-site accounts while retaining the pending class gate.
+    for req in portal.get('enrollment_requests', []):
+        if not isinstance(req, dict) or req.get('status') != 'pending':
+            continue
+        legacy_username = str(req.get('username', '')).strip()
+        legacy_hash = req.get('password_hash')
+        legacy_role = req.get('role', 'دانش‌آموز')
+        if (legacy_username and legacy_username not in users and legacy_hash
+                and legacy_role in ('دانش‌آموز', 'معلم')):
+            legacy_account = {
+                'password': legacy_hash,
+                'role': legacy_role,
+                'full_name': req.get('full_name', ''),
+                'class_access_approved': False,
+                'class_access_status': 'pending',
+                'class_access_requested_at': req.get('requested_at', ''),
+            }
+            if legacy_role == 'دانش‌آموز' and req.get('class_id'):
+                legacy_account['requested_class_id'] = req.get('class_id')
+            users[legacy_username] = legacy_account
+            req['account_precreated'] = True
+            req.pop('password_hash', None)
             changed = True
     return changed
 
@@ -6789,7 +7152,7 @@ def _school_load():
 
 
 def _ario_bind_device_account(portal, username, device_key):
-    """Link an already-approved student/teacher account to this browser device."""
+    """Link a student/teacher account (including class-pending accounts) to this browser device."""
     if not device_key or not re.fullmatch(r'[0-9a-f]{64}', str(device_key)):
         return False
     portal.setdefault('device_accounts', {})
@@ -6846,6 +7209,21 @@ def _school_teacher_classes(portal, username):
             if username in cls.get('teacher_usernames', [])]
 
 
+def _school_class_access_approved(account):
+    """Return whether a student/teacher has manager-approved class access.
+
+    Accounts created by older versions have no approval fields; those accounts
+    keep their previous behavior. Only explicit pending/rejected flags lock access.
+    """
+    if not isinstance(account, dict):
+        return False
+    if account.get('class_access_approved') is False:
+        return False
+    if account.get('class_access_status') in ('pending', 'rejected', 'suspended'):
+        return False
+    return True
+
+
 def _school_can_access_class(data, portal, class_id, write=False):
     cls = portal.get('classes', {}).get(class_id)
     if not cls:
@@ -6854,11 +7232,11 @@ def _school_can_access_class(data, portal, class_id, write=False):
         return True
     username = session.get('username')
     role = session.get('role')
+    account = data.get('users', {}).get(username, {})
     if role == 'معلم':
-        return username in cls.get('teacher_usernames', [])
+        return _school_class_access_approved(account) and username in cls.get('teacher_usernames', [])
     if role == 'دانش‌آموز' and not write:
-        account = data.get('users', {}).get(username, {})
-        return account.get('school_class_id') == class_id
+        return _school_class_access_approved(account) and account.get('school_class_id') == class_id
     return False
 
 
@@ -6867,7 +7245,10 @@ def _school_can_write_class(data, portal, class_id):
         return class_id in portal.get('classes', {})
     username = session.get('username')
     cls = portal.get('classes', {}).get(class_id, {})
-    return session.get('role') == 'معلم' and username in cls.get('teacher_usernames', [])
+    account = data.get('users', {}).get(username, {})
+    return (session.get('role') == 'معلم'
+            and _school_class_access_approved(account)
+            and username in cls.get('teacher_usernames', []))
 
 
 def _school_page(content, title='مدرسه‌یار', active_page='school'):
@@ -6886,6 +7267,32 @@ def _school_page(content, title='مدرسه‌یار', active_page='school'):
     .ario-school-notice{padding:12px 15px;border-radius:13px;margin:14px 0;background:rgba(114,223,192,.1);border:1px solid rgba(114,223,192,.25);color:#a9f0dc;font-size:.82rem}.ario-school-empty{padding:25px;text-align:center;color:#a9bfd8;border:1px dashed rgba(155,189,230,.24);border-radius:17px}.ario-school-chip{display:inline-flex;padding:5px 9px;border-radius:999px;background:rgba(114,223,192,.12);color:#8ce8d0;font-size:.7rem;font-weight:800}
     .ario-parent-children-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.ario-parent-child-card{min-width:0;padding:22px;border-radius:22px;background:radial-gradient(circle at 92% 0%,rgba(114,223,192,.13),transparent 38%),linear-gradient(145deg,#123653,#091e34);border:1px solid rgba(155,189,230,.19);box-shadow:0 16px 38px rgba(0,0,0,.12)}.ario-parent-child-card h2{font-size:1.12rem;margin:15px 0 3px;color:#f4f8ff}.ario-parent-username{color:#9fb8d2;font-size:.72rem;overflow-wrap:anywhere}.ario-parent-child-top,.ario-school-parent-head{display:flex;justify-content:space-between;align-items:center;gap:12px}.ario-parent-child-index{font-size:.7rem;color:#9ddfd5}.ario-parent-mini-stats{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;margin:17px 0}.ario-parent-mini-stats div{padding:12px;border-radius:13px;background:rgba(255,255,255,.045);border:1px solid rgba(155,189,230,.12);min-width:0}.ario-parent-mini-stats strong,.ario-parent-mini-stats small{display:block;overflow-wrap:anywhere}.ario-parent-mini-stats strong{font-size:1.05rem;color:#9cebd8}.ario-parent-mini-stats small{font-size:.68rem;color:#a9bfd7;margin-top:3px}.ario-parent-attendance-strip{display:flex;gap:7px;flex-wrap:wrap;margin:10px 0 16px}.ario-parent-attendance-strip span{padding:6px 9px;border-radius:9px;background:rgba(255,255,255,.05);color:#c5d7ea;font-size:.7rem}.ario-school-parent-head h3{margin:9px 0 2px}.ario-school-parent-head small{color:#9fb8d2;font-size:.72rem}.ario-school-parent-head>i{font-size:1.6rem;color:#9de7d7}.ario-parent-linked-list{display:grid;gap:8px;margin:16px 0}.ario-parent-linked-child{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:11px 12px;border:1px solid rgba(155,189,230,.13);background:rgba(255,255,255,.035);border-radius:13px}.ario-parent-linked-child strong,.ario-parent-linked-child small{display:block;overflow-wrap:anywhere}.ario-parent-linked-child strong{font-size:.82rem}.ario-parent-linked-child small{font-size:.68rem;color:#9fb8d2;margin-top:3px}.ario-school-parent-link-form{display:flex;align-items:end;gap:10px;flex-wrap:wrap;margin-top:12px}.ario-school-parent-link-form .ario-school-field{flex:1;min-width:210px}.ario-school-parent-link-form button:disabled{opacity:.45;cursor:not-allowed}body[data-theme="light"] .ario-parent-child-card{background:linear-gradient(145deg,#fff,#edf6ff);border-color:#d5e3f2;box-shadow:0 12px 30px rgba(27,54,86,.06)}body[data-theme="light"] .ario-parent-child-card h2{color:#193654}body[data-theme="light"] .ario-parent-username,body[data-theme="light"] .ario-parent-mini-stats small,body[data-theme="light"] .ario-parent-linked-child small{color:#60758f}body[data-theme="light"] .ario-parent-mini-stats div,body[data-theme="light"] .ario-parent-linked-child{background:#f6f9fd;border-color:#dbe6f2}body[data-theme="light"] .ario-parent-attendance-strip span{background:#edf3fa;color:#42617f}
     @media(max-width:760px){.ario-parent-children-grid{grid-template-columns:1fr}.ario-parent-child-card{padding:17px}.ario-school-parent-link-form{align-items:stretch;flex-direction:column}.ario-school-parent-link-form .ario-school-field,.ario-school-parent-link-form button{width:100%}.ario-parent-linked-child{align-items:flex-start;flex-direction:column}.ario-parent-linked-child form,.ario-parent-linked-child button{width:100%}}
+    .ario-school-grade-group{margin:14px 0;border:1px solid rgba(155,189,230,.18);border-radius:20px;overflow:hidden;background:linear-gradient(145deg,rgba(18,49,78,.62),rgba(8,25,44,.72));box-shadow:0 12px 28px rgba(0,0,0,.08)}
+    .ario-school-grade-group>summary,.ario-school-class-fold>summary{list-style:none;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:17px 19px;color:#eef6ff;font-weight:900}
+    .ario-school-grade-group>summary::-webkit-details-marker,.ario-school-class-fold>summary::-webkit-details-marker{display:none}
+    .ario-school-grade-group>summary:after,.ario-school-class-fold>summary:after{content:'＋';color:#8de6d0;font-size:1.05rem;font-weight:900}
+    .ario-school-grade-group[open]>summary:after,.ario-school-class-fold[open]>summary:after{content:'−'}
+    .ario-school-grade-group>summary{background:linear-gradient(100deg,rgba(113,223,199,.09),rgba(115,160,221,.08));font-size:1rem}
+    .ario-school-grade-meta{display:flex;align-items:center;gap:8px;color:#9fb9d4;font-size:.72rem;font-weight:700}
+    .ario-school-grade-body{padding:4px 15px 15px}
+    .ario-school-grade-body>.ario-school-grid{margin-top:8px}
+    .ario-school-class-fold{margin:12px 0;border:1px solid rgba(155,189,230,.16);border-radius:16px;overflow:hidden;background:rgba(255,255,255,.025)}
+    .ario-school-class-fold>summary{padding:14px 16px;background:rgba(112,156,211,.07);font-size:.87rem}
+    .ario-school-absence-list{display:grid;gap:10px;padding:12px}
+    .ario-school-absence-row{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(180px,.8fr);gap:12px;align-items:center;padding:13px;border:1px solid rgba(248,113,113,.19);border-radius:14px;background:rgba(127,29,29,.09)}
+    .ario-school-absence-person{min-width:0}.ario-school-absence-person strong,.ario-school-absence-person small{display:block;overflow-wrap:anywhere}.ario-school-absence-person strong{color:#f1f6ff;font-size:.87rem}.ario-school-absence-person small{color:#a9bfd7;font-size:.7rem;margin-top:4px;line-height:1.8}
+    .ario-school-absence-meta{display:flex;flex-wrap:wrap;gap:6px;margin-top:7px}.ario-school-absence-tag{display:inline-flex;align-items:center;padding:4px 8px;border-radius:999px;background:rgba(255,255,255,.07);color:#cadaec;font-size:.65rem}
+    .ario-school-absence-tag.pending{background:rgba(251,191,36,.12);color:#f8d789}.ario-school-absence-tag.excused{background:rgba(52,211,153,.12);color:#9de9c8}.ario-school-absence-tag.unexcused{background:rgba(248,113,113,.12);color:#ffb3b3}
+    .ario-school-absence-form{display:flex;align-items:center;gap:7px;min-width:0}.ario-school-absence-form select{flex:1;min-width:0;border:1px solid rgba(161,192,229,.22);border-radius:9px;padding:9px;background:#0a2038;color:#f4f8ff;font:inherit;font-size:.74rem}.ario-school-absence-form button{white-space:nowrap}
+    body[data-theme="light"] .ario-school-grade-group{background:linear-gradient(145deg,#fff,#f2f7fd);border-color:#d8e4f1;box-shadow:0 10px 26px rgba(27,54,86,.05)}
+    body[data-theme="light"] .ario-school-grade-group>summary,body[data-theme="light"] .ario-school-class-fold>summary{color:#193654}
+    body[data-theme="light"] .ario-school-grade-meta,body[data-theme="light"] .ario-school-absence-person small{color:#60758f}
+    body[data-theme="light"] .ario-school-class-fold{background:#fff;border-color:#dbe6f2}
+    body[data-theme="light"] .ario-school-class-fold>summary{background:#f1f6fc}
+    body[data-theme="light"] .ario-school-absence-row{background:#fff7f6;border-color:#f1d8d5}
+    body[data-theme="light"] .ario-school-absence-person strong{color:#193654}
+    body[data-theme="light"] .ario-school-absence-form select{background:#fff;color:#193654;border-color:#cfdeed}
+    @media(max-width:650px){.ario-school-grade-group>summary{padding:14px}.ario-school-grade-body{padding:2px 9px 10px}.ario-school-absence-row{grid-template-columns:1fr}.ario-school-absence-form{width:100%}}
     .ario-school-back{display:inline-flex;margin-bottom:15px;color:#9ddfd5;text-decoration:none;font-size:.8rem;font-weight:800}
     .ario-student-today-checkin{border-color:rgba(115,229,202,.3);background:radial-gradient(circle at 95% 10%,rgba(105,226,198,.12),transparent 38%),linear-gradient(145deg,#123b58,#091d33)}.ario-student-today-checkin h3{font-size:1.05rem}.ario-student-today-checkin p{color:#a9c1d8;line-height:1.9}body[data-theme="light"] .ario-student-today-checkin{background:linear-gradient(145deg,#f0fffb,#eaf3ff);border-color:#c9e8e0}
     body[data-theme="light"] .ario-school-hero,body[data-theme="light"] .ario-school-card,body[data-theme="light"] .ario-school-kpi,body[data-theme="light"] .ario-school-panel{background:linear-gradient(145deg,#fff,#eff5fc);border-color:#d9e4f1;box-shadow:0 12px 30px rgba(27,54,86,.06);color:#1d3553}
@@ -6935,61 +7342,432 @@ def _school_now():
 
 @app.route('/school')
 def ario_school_dashboard():
+    # Role-aware redesigned dashboard; existing school module routes remain unchanged.
     login_redirect = _school_require_login()
     if login_redirect:
         return login_redirect
     if session.get('role') == 'والد':
         return redirect(url_for('ario_parent_dashboard'))
+
     data, portal = _school_load()
     username = session.get('username', '')
     role = session.get('role', '')
+    is_admin = _is_school_admin()
     all_classes = portal.get('classes', {})
-    if _is_school_admin():
-        visible_ids = list(all_classes.keys())
-    elif role == 'معلم':
-        visible_ids = _school_teacher_classes(portal, username)
-    else:
-        account = data.get('users', {}).get(username, {})
-        class_id = account.get('school_class_id')
-        visible_ids = [class_id] if class_id in all_classes else []
+    current_account = data.get('users', {}).get(username, {})
+    class_access_pending = role in ('دانش‌آموز', 'معلم') and not _school_class_access_approved(current_account)
+    class_access_rejected = class_access_pending and current_account.get('class_access_status') == 'rejected'
 
-    student_count = sum(1 for item in data.get('users', {}).values() if item.get('role') == 'دانش‌آموز')
-    teacher_count = sum(1 for item in data.get('users', {}).values() if item.get('role') == 'معلم')
-    homework_count = len(portal.get('homework', []))
-    grade_count = len(portal.get('grades', []))
-    exam_count = len(portal.get('exams', []))
-    token = _school_csrf()
-    cards = []
-    for class_id in sorted(visible_ids, key=lambda cid: (all_classes[cid].get('grade_number', 99), int(cid.split('-')[-1]))):
-        cls = all_classes[class_id]
-        students = _school_class_students(data, class_id)
-        teachers = cls.get('teacher_usernames', [])
-        cards.append(f'''<article class="ario-school-card"><div class="ario-school-card-top"><span>{_school_html(cls.get('grade',''))} · کلاس {_school_html(cls.get('section',''))}</span><i class="fas fa-people-roof"></i></div><h3>{_school_html(_school_class_label(cls))}</h3><p>{len(students)} دانش‌آموز · {len(teachers)} دبیر از ظرفیت {SCHOOL_TEACHER_LIMIT_PER_CLASS}</p><div class="ario-school-actions"><a class="ario-school-btn primary" href="/school/class/{class_id}">ورود به کلاس <i class="fas fa-arrow-left"></i></a></div></article>''')
-    class_cards = ''.join(cards) or '<div class="ario-school-empty">هنوز کلاسی به حساب شما اختصاص داده نشده است. از مدیر مدرسه بخواهید کلاس‌های شما را تنظیم کند.</div>'
-    if role == 'دانش‌آموز':
-        account = data.get('users', {}).get(username, {})
-        class_label = all_classes.get(account.get('school_class_id'), {})
-        quick = ''
-        if class_label:
-            cid = account.get('school_class_id')
-            today_key = _school_now().strftime('%Y-%m-%d')
-            today_attendance = portal.get('attendance', {}).get(today_key, {}).get(cid, {}).get(username, {})
-            today_status_text = today_attendance.get('status', 'هنوز ثبت نشده')
-            today_status_source = 'خوداظهاری شما؛ در انتظار بررسی دبیر' if today_attendance.get('source') == 'student_self_report' else ('ثبت‌شده توسط دبیر یا مدیر' if today_attendance else 'پس از ورود، وضعیت امروزت را ثبت کن')
-            quick = f'''<section class="ario-school-panel ario-student-today-checkin"><div class="ario-school-card-top"><span>MY DAILY ATTENDANCE</span><i class="fas fa-calendar-check"></i></div><h3>وضعیت حضور امروز: {_school_html(today_status_text)}</h3><p>{_school_html(today_status_source)}</p></section><section class="ario-school-section"><div class="ario-school-section-head"><div><h2>دسترسی‌های کلاس من</h2><p>ابزارهای آموزشی و وضعیت درسی شما</p></div></div><div class="ario-school-grid"><a class="ario-school-card" href="/school/attendance/{cid}"><div class="ario-school-card-top"><span>ATTENDANCE</span><i class="fas fa-calendar-check"></i></div><h3>حضور و غیاب من</h3><p>مشاهده سوابق حضور، غیبت و تأخیر</p></a><a class="ario-school-card" href="/school/grades/{cid}"><div class="ario-school-card-top"><span>MY GRADES</span><i class="fas fa-chart-line"></i></div><h3>نمره‌های من</h3><p>مشاهده نمره‌های ثبت‌شده</p></a><a class="ario-school-card" href="/school/homework/{cid}"><div class="ario-school-card-top"><span>HOMEWORK</span><i class="fas fa-book-open"></i></div><h3>تکالیف من</h3><p>دیدن تکالیف و ارسال پاسخ</p></a><a class="ario-school-card" href="/school/timetable/{cid}"><div class="ario-school-card-top"><span>TIMETABLE</span><i class="fas fa-clock"></i></div><h3>برنامه هفتگی</h3><p>برنامه درس‌های کلاس من</p></a><a class="ario-school-card" href="/school/exams"><div class="ario-school-card-top"><span>ONLINE EXAMS</span><i class="fas fa-file-circle-check"></i></div><h3>امتحانات آنلاین</h3><p>مشاهده و شرکت در آزمون‌های کلاس من</p></a></div></section>'''
+    if is_admin:
+        # Admin always sees all 13 official classes in the school's defined order.
+        visible_ids = [
+            f'{grade_number}-{section_index}'
+            for grade_number, _grade_name, section_count in SCHOOL_GRADE_CONFIG
+            for section_index in range(1, section_count + 1)
+            if f'{grade_number}-{section_index}' in all_classes
+        ]
     elif role == 'معلم':
-        quick = '''<section class="ario-school-section"><div class="ario-school-section-head"><div><h2>ابزارهای آموزشی دبیر</h2><p>مدیریت فعالیت‌های آموزشی کلاس‌های اختصاص‌یافته</p></div></div><div class="ario-school-grid"><a class="ario-school-card" href="/school/announcements"><div class="ario-school-card-top"><span>ANNOUNCEMENTS</span><i class="fas fa-bullhorn"></i></div><h3>اطلاعیه‌های من</h3><p>انتشار پیام برای کلاس‌های خودم</p></a><a class="ario-school-card" href="/school/exams"><div class="ario-school-card-top"><span>EXAMS</span><i class="fas fa-file-circle-check"></i></div><h3>امتحانات کلاس‌ها</h3><p>مشاهده آزمون‌های کلاس‌های اختصاص‌یافته</p></a></div></section>'''
+        visible_ids = _school_teacher_classes(portal, username) if not class_access_pending else []
+    elif role == 'دانش‌آموز':
+        class_id = current_account.get('school_class_id') if not class_access_pending else None
+        visible_ids = [class_id] if class_id in all_classes else []
     else:
-        pending_count = sum(1 for req in portal.get('enrollment_requests', []) if req.get('status') == 'pending')
-        quick = f'''<section class="ario-school-section"><div class="ario-school-section-head"><div><h2>ابزارهای مدیریت مدرسه</h2><p>هر ابزار برای یک کار مشخص؛ برای شروع روی کارت موردنظر کلیک کنید.</p></div></div><div class="ario-school-grid"><a class="ario-school-card" href="/school/exams"><div class="ario-school-card-top"><span>EXAM CENTER</span><i class="fas fa-file-circle-check"></i></div><h3>ساخت و مدیریت امتحان</h3><p>انتخاب کلاس، افزودن سؤال چهارگزینه‌ای و مشاهده نتایج</p></a><a class="ario-school-card" href="/school/requests"><div class="ario-school-card-top"><span>ENTRY APPROVAL</span><i class="fas fa-user-check"></i></div><h3>درخواست‌های ساخت حساب دانش‌آموز و دبیر</h3><p>{pending_count} درخواست در انتظار تأیید مدیر</p></a><a class="ario-school-card" href="/school/attendance-overview"><div class="ario-school-card-top"><span>DAILY ATTENDANCE</span><i class="fas fa-clipboard-check"></i></div><h3>گزارش حضور امروز</h3><p>مشاهده فوری وضعیت حاضر، غایب و ثبت‌نشده در همه کلاس‌ها</p></a><a class="ario-school-card" href="/school/announcements"><div class="ario-school-card-top"><span>ANNOUNCEMENTS</span><i class="fas fa-bullhorn"></i></div><h3>اطلاعیه‌ها</h3><p>انتشار پیام برای مدرسه یا یک کلاس</p></a><a class="ario-school-card" href="/school/teachers"><div class="ario-school-card-top"><span>TEACHERS</span><i class="fas fa-chalkboard-user"></i></div><h3>فهرست دبیران</h3><p>مشاهده دبیرها و کلاس‌های مرتبط</p></a><a class="ario-school-card" href="/school/parents/manage"><div class="ario-school-card-top"><span>PARENT PORTAL</span><i class="fas fa-people-roof"></i></div><h3>مدیریت والدین و فرزندان</h3><p>ساخت حساب والد و اتصال حداکثر سه دانش‌آموز به هر خانواده</p></a><a class="ario-school-card" href="/admin"><div class="ario-school-card-top"><span>WEBSITE CMS</span><i class="fas fa-sliders"></i></div><h3>مدیریت محتوای سایت</h3><p>مدیریت خبرها، کارت‌ها، کاربران و ظاهر سایت</p></a></div></section>'''
-    announcements = []
-    student_class = data.get('users', {}).get(username, {}).get('school_class_id')
-    for item in reversed(portal.get('announcements', [])[-8:]):
+        visible_ids = []
+
+    visible_ids = [cid for cid in visible_ids if cid in all_classes]
+    visible_ids.sort(key=lambda cid: (
+        _school_grade_number(all_classes[cid].get('grade_number'), cid),
+        int(str(cid).split('-')[-1]) if str(cid).split('-')[-1].isdigit() else 99
+    ))
+
+    today = _school_now()
+    today_key = today.strftime('%Y-%m-%d')
+    today_fa = _ario_shamsi_date(today.strftime('%Y-%m-%d'))
+    today_records = portal.get('attendance', {}).get(today_key, {})
+    students_by_class = {cid: _school_class_students(data, cid) for cid in visible_ids}
+    visible_student_names = {student for names in students_by_class.values() for student in names}
+    total_students = len(visible_student_names)
+    visible_teacher_names = {
+        teacher
+        for cid in visible_ids
+        for teacher in all_classes[cid].get('teacher_usernames', [])
+    }
+    total_teachers = len(visible_teacher_names)
+
+    absent_total = 0
+    pending_absences = 0
+    confirmed_excused = 0
+    confirmed_unexcused = 0
+    recorded_today = 0
+    class_rows_by_grade = {}
+
+    for grade_number, grade_name, _section_count in SCHOOL_GRADE_CONFIG:
+        grade_rows = []
+        for class_id in visible_ids:
+            cls = all_classes[class_id]
+            if _school_grade_number(cls.get('grade_number'), class_id) != int(grade_number):
+                continue
+            students = students_by_class.get(class_id, [])
+            day = today_records.get(class_id, {})
+            absent_students = []
+            class_recorded = 0
+            for student in students:
+                item = day.get(student, {})
+                if not isinstance(item, dict) or not item.get('status'):
+                    continue
+                class_recorded += 1
+                status = item.get('status')
+                if status not in ('غایب', 'موجه'):
+                    continue
+                absent_students.append(student)
+                absent_total += 1
+                classification = item.get('absence_classification')
+                if classification == 'موجه' or status == 'موجه':
+                    confirmed_excused += 1
+                elif classification == 'غیرموجه':
+                    confirmed_unexcused += 1
+                else:
+                    pending_absences += 1
+            recorded_today += class_recorded
+            teachers = cls.get('teacher_usernames', [])
+            section_label = str(cls.get('section', ''))
+            avatar_grade = {'7': '۷', '8': '۸', '9': '۹'}.get(str(grade_number), str(grade_number))
+            avatar_section = {'1':'۱','2':'۲','3':'۳','4':'۴','5':'۵'}.get(section_label, section_label)
+            class_label = _school_class_label(cls)
+            # Build a generous search index for natural Persian/Farsi queries.
+            # It deliberately includes the grade/section as words, digits and common class-code forms.
+            grade_fa = {'7': '۷', '8': '۸', '9': '۹'}.get(str(grade_number), str(grade_number))
+            section_ascii = str(class_id.split('-')[-1])
+            section_fa = {'1':'۱','2':'۲','3':'۳','4':'۴','5':'۵'}.get(section_ascii, section_label)
+            section_word = {'1':'اول یک یکم اولی', '2':'دوم دو دومی', '3':'سوم سه سومی', '4':'چهارم چهار چهارمی', '5':'پنجم پنج پنجمی'}.get(section_ascii, '')
+            grade_word = {'7':'هفتم هفت هفتمی', '8':'هشتم هشت هشتمی', '9':'نهم نه نهمی'}.get(str(grade_number), grade_name)
+            search_terms = ' '.join(str(part) for part in (
+                class_label, grade_name, grade_word, section_label, section_fa, section_ascii,
+                f'{grade_number}-{section_ascii}', f'{grade_fa}-{section_fa}',
+                f'{grade_number}/{section_ascii}', f'{grade_fa}/{section_fa}',
+                f'{grade_number}{section_ascii}', f'{grade_fa}{section_fa}',
+                f'کلاس {grade_name} {section_fa}', f'کلاس {grade_name} {section_ascii}',
+                f'{grade_name} کلاس {section_fa}', f'{grade_name} کلاس {section_ascii}',
+                f'{grade_name} {section_fa}', f'{grade_name} {section_ascii}',
+                f'{grade_name} {section_word}', f'پایه {grade_name} کلاس {section_word}',
+                f'پایه {grade_fa} کلاس {section_fa}', f'پایه {grade_number} کلاس {section_ascii}',
+            ))
+            grade_rows.append(
+                f'''<article class="ario-hub-class-row" data-school-class-card data-grade-number="{int(grade_number)}" data-class-section="{_school_html(section_ascii)}" data-search="{_school_html(search_terms)}">
+                  <div class="ario-hub-class-avatar">{_school_html(avatar_grade)}<span>{_school_html(avatar_section)}</span></div>
+                  <div class="ario-hub-class-copy"><strong>{_school_html(class_label)}</strong><small>{len(students)} دانش‌آموز · {len(teachers)} دبیر</small>
+                    <div class="ario-hub-class-metrics"><span><i class="fas fa-user-xmark"></i> {len(absent_students)} غایب امروز</span><span><i class="fas fa-clipboard-check"></i> {class_recorded}/{len(students)} ثبت وضعیت</span></div>
+                  </div>
+                  <div class="ario-hub-class-actions"><a class="ario-school-btn primary" href="/school/class/{_school_html(class_id)}">ورود به کلاس</a><a class="ario-school-btn" href="/school/attendance-overview?date={_school_html(today_key)}">گزارش غایبان</a></div>
+                </article>'''
+            )
+        if grade_rows:
+            class_rows_by_grade[grade_name] = ''.join(grade_rows)
+
+    grade_accordions = []
+    for grade_number, grade_name, _section_count in SCHOOL_GRADE_CONFIG:
+        rows_html = class_rows_by_grade.get(grade_name, '')
+        if not rows_html:
+            continue
+        # Show every grade and its classes immediately; users should not have
+        # to discover collapsed grade sections to see the full school structure.
+        open_attr = 'open'
+        grade_accordions.append(
+            f'''<details class="ario-hub-grade" data-school-grade-group {open_attr}>
+              <summary><span class="ario-hub-grade-title"><span class="ario-hub-grade-mark">{ {'7':'۷','8':'۸','9':'۹'}.get(str(grade_number), grade_number) }</span><span>پایه { _school_html(grade_name) }<small>{len(rows_html) and sum(1 for cid in visible_ids if _school_grade_number(all_classes[cid].get('grade_number'), cid)==int(grade_number))} کلاس در دسترس</small></span></span><i class="fas fa-chevron-down"></i></summary>
+              <div class="ario-hub-grade-content">{rows_html}</div>
+            </details>'''
+        )
+    if class_access_pending:
+        requested_id = current_account.get('requested_class_id', '')
+        requested_cls = all_classes.get(requested_id, {}) if requested_id else {}
+        requested_label = _school_class_label(requested_cls) if requested_cls else ('کلاس‌های آموزشی' if role == 'معلم' else 'کلاس درخواستی')
+        if class_access_rejected:
+            class_notice_title = 'درخواست دسترسی کلاسی تأیید نشد'
+            class_notice_body = 'حساب شما برای بخش‌های عمومی سایت فعال است، اما امکانات کلاس همچنان بسته‌اند. برای پیگیری یا ثبت درخواست تازه با مدیر مدرسه تماس بگیرید.'
+        else:
+            class_notice_title = 'دسترسی آموزشی در انتظار تأیید مدیر'
+            class_notice_body = f'حساب شما فعال است و می‌توانید از بخش‌های عمومی سایت استفاده کنید. درخواست دسترسی به «{_school_html(requested_label)}» برای مدیر ارسال شده است. پس از تأیید، کلاس و امکانات آموزشی شما فعال می‌شوند.'
+        class_tree_html = f'<div class="ario-school-notice"><strong>{class_notice_title}</strong><br>{class_notice_body}</div>'
+    else:
+        class_tree_html = ''.join(grade_accordions) or '<div class="ario-school-empty">هنوز کلاسی به حساب شما اختصاص داده نشده است. از مدیر مدرسه بخواهید کلاس‌ها را تنظیم کند.</div>'
+
+    student_count_global = sum(1 for item in data.get('users', {}).values() if item.get('role') == 'دانش‌آموز')
+    teacher_count_global = sum(1 for item in data.get('users', {}).values() if item.get('role') == 'معلم')
+    today_absent_scope = absent_total
+    unreviewed_scope = pending_absences
+    student_class = current_account.get('school_class_id') if role == 'دانش‌آموز' and not class_access_pending else None
+    if is_admin:
+        visible_exam_count = len(portal.get('exams', []))
+    elif role == 'معلم':
+        visible_exam_count = sum(1 for item in portal.get('exams', []) if item.get('class_id') in visible_ids)
+    else:
+        visible_exam_count = sum(1 for item in portal.get('exams', []) if item.get('class_id') == student_class and item.get('published', True))
+    student_attendance = today_records.get(student_class, {}).get(username, {}) if role == 'دانش‌آموز' and student_class else {}
+    student_status = student_attendance.get('status', 'ثبت نشده')
+
+    # Role-scoped module tiles: only links the current role is allowed to use.
+    if is_admin:
+        pending_requests = sum(1 for req in portal.get('enrollment_requests', []) if req.get('status') == 'pending')
+        tiles = [
+            ('ABSENCE CENTER','غایبان مدرسه','فقط غایبان امروز؛ تعیین موجه یا غیرموجه', 'fa-user-clock','/school/attendance-overview', f'{today_absent_scope} غایب'),
+            ('ONLINE EXAMS','مرکز امتحانات','ساخت آزمون چهارگزینه‌ای و بررسی نتایج','fa-file-circle-check','/school/exams', f'{visible_exam_count} آزمون'),
+            ('ENROLLMENT','درخواست‌های ورود','تأیید یا رد حساب‌های دانش‌آموز و دبیر','fa-user-check','/school/requests', f'{pending_requests} درخواست'),
+            ('GRADEBOOK','دفتر نمرات','ثبت و بررسی نمرات کلاس‌ها','fa-chart-line','/school#school-class-browser','انتخاب کلاس'),
+            ('HOMEWORK','تکالیف','تعریف تکلیف و بررسی پاسخ‌ها','fa-book-open','/school#school-class-browser', f'{len(portal.get("homework", []))} تکلیف · انتخاب کلاس'),
+            ('TIMETABLE','برنامه هفتگی','تنظیم برنامهٔ آموزشی هر کلاس','fa-calendar-week','/school#school-class-browser','انتخاب کلاس'),
+            ('ANNOUNCEMENTS','اطلاعیه‌ها','ارسال پیام به کل مدرسه یا یک کلاس','fa-bullhorn','/school/announcements', f'{len(portal.get("announcements", []))} اطلاعیه'),
+            ('TEACHERS','مدیریت دبیران','مشاهدهٔ دبیران و کلاس‌های تخصیص‌یافته','fa-chalkboard-user','/school/teachers', f'{teacher_count_global} دبیر'),
+            ('FAMILY PORTAL','مدیریت والدین','ساخت حساب والد و اتصال فرزندان','fa-people-roof','/school/parents/manage','حداکثر ۳ فرزند'),
+            ('SCHOOL WEBSITE','مدیریت محتوای سایت','مدیریت خبرها، کاربران و محتوای وب‌سایت','fa-sliders','/admin','مدیریت سایت'),
+        ]
+    elif role == 'معلم' and class_access_pending:
+        tiles = [(('ACCESS REJECTED' if class_access_rejected else 'ACCESS PENDING'),('درخواست دسترسی کلاس رد شده' if class_access_rejected else 'دسترسی کلاس در انتظار تأیید'),('برای پیگیری با مدیر مدرسه تماس بگیرید.' if class_access_rejected else 'بعد از تأیید مدیر، کلاس‌های تدریس و ابزارهای آموزشی فعال می‌شوند.'),'fa-hourglass-half','/profile','پیگیری درخواست')]
+    elif role == 'معلم':
+        tiles = [
+            ('ABSENCE CENTER','غایبان کلاس‌های من','فقط غایبان کلاس‌های اختصاص‌یافته','fa-user-clock','/school/attendance-overview', f'{today_absent_scope} غایب'),
+            ('ONLINE EXAMS','امتحانات کلاس‌ها','مشاهده آزمون‌ها و نتایج کلاس‌های من','fa-file-circle-check','/school/exams', f'{visible_exam_count} آزمون'),
+            ('ANNOUNCEMENTS','اطلاعیه‌های من','ارسال اطلاعیه برای کلاس‌های خودم','fa-bullhorn','/school/announcements', f'{len(portal.get("announcements", []))} اطلاعیه'),
+        ]
+    elif role == 'دانش‌آموز' and class_access_pending:
+        tiles = [(('ACCESS REJECTED' if class_access_rejected else 'ACCESS PENDING'),('درخواست عضویت کلاس رد شده' if class_access_rejected else 'درخواست عضویت کلاسی'),('برای پیگیری با مدیر مدرسه تماس بگیرید.' if class_access_rejected else 'حساب شما فعال است؛ امکانات کلاس بعد از تأیید مدیر باز می‌شوند.'),'fa-hourglass-half','/profile','وضعیت درخواست')]
+    elif role == 'دانش‌آموز' and student_class in all_classes:
+        tiles = [
+            ('MY ATTENDANCE','حضور و غیاب من','مشاهدهٔ سوابق حضور و غیبت','fa-calendar-check',f'/school/attendance/{student_class}','سوابق من'),
+            ('MY GRADES','نمره‌های من','مشاهده نمرات ثبت‌شده','fa-chart-line',f'/school/grades/{student_class}','کارنامه و نمرات'),
+            ('HOMEWORK','تکالیف من','دیدن تکالیف و ارسال پاسخ','fa-book-open',f'/school/homework/{student_class}','تکالیف کلاس'),
+            ('TIMETABLE','برنامه هفتگی','مشاهده برنامه درس‌های کلاس','fa-clock',f'/school/timetable/{student_class}','برنامه کلاس'),
+            ('ONLINE EXAMS','امتحانات آنلاین','مشاهده و شرکت در آزمون‌ها','fa-file-circle-check','/school/exams','آزمون‌های من'),
+        ]
+    else:
+        tiles = []
+
+    tile_html = ''.join(
+        f'''<a class="ario-hub-module" href="{_school_html(href)}"><span class="ario-hub-module-icon"><i class="fas {_school_html(icon)}"></i></span><span class="ario-hub-module-copy"><small>{_school_html(kicker)}</small><strong>{_school_html(label)}</strong><em>{_school_html(description)}</em></span><span class="ario-hub-module-meta">{_school_html(meta)} <i class="fas fa-arrow-left"></i></span></a>'''
+        for kicker, label, description, icon, href, meta in tiles
+    )
+
+    # Recent announcements are filtered by the current role and class scope.
+    visible_announcements = []
+    teacher_scope = (set(_school_teacher_classes(portal, username))
+                     if role == 'معلم' and not class_access_pending else set())
+    for item in reversed(portal.get('announcements', [])[-30:]):
         target = item.get('target_class', 'all')
-        if _is_school_admin() or (role == 'معلم' and (target == 'all' or target in _school_teacher_classes(portal, username))) or (role == 'دانش‌آموز' and (target == 'all' or (student_class and target == student_class))):
-            announcements.append(f'<div class="ario-school-panel"><span class="ario-school-chip">{_school_html(item.get("target_label","همه مدرسه"))}</span><h3>{_school_html(item.get("title","اطلاعیه"))}</h3><p style="color:#b8cbe0;line-height:2">{_school_html(item.get("text",""))}</p><small style="color:#89a7c8">{_school_html(item.get("created_at",""))} · {_school_html(item.get("created_by",""))}</small></div>')
-    notice_html = ''.join(announcements) or '<div class="ario-school-empty">هنوز اطلاعیه‌ای برای نمایش وجود ندارد.</div>'
-    content = f'''<main class="ario-school-wrap"><section class="ario-school-hero"><span class="ario-school-eyebrow">ARIO SMART SCHOOL · LEARNING HUB</span><h1>مدرسه‌یار آریو</h1><p>سامانه یکپارچه آموزش و مدیریت کلاس‌ها؛ حضور و غیاب، نمره‌ها، تکالیف، برنامه هفتگی و اطلاعیه‌ها در یک فضای امن.</p><div class="ario-school-actions"><span class="ario-school-chip">{_school_html(username)} · {_school_html(role)}</span><a class="ario-school-btn primary" href="/home">بازگشت به سایت اصلی <i class="fas fa-arrow-left"></i></a></div></section><section class="ario-school-kpis"><div class="ario-school-kpi"><strong>{len(all_classes)}</strong><span>کلاس تعریف‌شده</span></div><div class="ario-school-kpi"><strong>{student_count}</strong><span>حساب دانش‌آموزی</span></div><div class="ario-school-kpi"><strong>{teacher_count}</strong><span>حساب دبیران</span></div><div class="ario-school-kpi"><strong>{exam_count}</strong><span>امتحان آنلاین · {homework_count} تکلیف · {grade_count} برگه نمره</span></div></section>{quick}<section class="ario-school-section"><div class="ario-school-section-head"><div><h2>{'کلاس‌های مدرسه' if _is_school_admin() else ('کلاس‌های تدریس من' if role == 'معلم' else 'کلاس من')}</h2><p>هفتم: ۴ کلاس · هشتم: ۵ کلاس · نهم: ۴ کلاس</p></div></div><div class="ario-school-grid">{class_cards}</div></section><section class="ario-school-section"><div class="ario-school-section-head"><div><h2>تابلوی اطلاعیه‌ها</h2><p>آخرین پیام‌های آموزشی و مدرسه‌ای</p></div><a class="ario-school-btn" href="/school/announcements">همه اطلاعیه‌ها</a></div>{notice_html}</section></main>'''
+        allowed = is_admin or target == 'all'
+        if role == 'معلم' and target != 'all':
+            allowed = target in teacher_scope
+        elif role == 'دانش‌آموز' and target != 'all':
+            allowed = bool(student_class and target == student_class)
+        if allowed:
+            visible_announcements.append(item)
+        if len(visible_announcements) >= 4:
+            break
+    announcement_cards = ''.join(
+        f'''<article class="ario-hub-notice"><span>{_school_html(item.get('target_label','اطلاعیه مدرسه'))}</span><strong>{_school_html(item.get('title','اطلاعیه'))}</strong><p>{_school_html(item.get('text',''))}</p><small>{_school_html(_ario_shamsi_date(item.get('created_at',''))) } · {_school_html(item.get('created_by',''))}</small></article>'''
+        for item in visible_announcements
+    ) or '<div class="ario-school-empty">هنوز اطلاعیه‌ای برای نمایش وجود ندارد.</div>'
+
+    if is_admin:
+        kpi_items = [
+            (len(all_classes), 'کلاس فعال مدرسه', 'fa-school'),
+            (student_count_global, 'حساب دانش‌آموزی', 'fa-user-graduate'),
+            (today_absent_scope, 'غایب امروز', 'fa-user-xmark'),
+            (unreviewed_scope, 'غیبت در انتظار بررسی', 'fa-hourglass-half'),
+        ]
+        side_title = 'مرکز کنترل مدیر'
+        side_desc = 'نمای کلی اتفاق‌های امروز مدرسه و دسترسی‌های پرتکرار.'
+        side_stat = f'''<div class="ario-hub-side-stat"><strong>{confirmed_excused}</strong><span>موجه</span><strong>{confirmed_unexcused}</strong><span>غیرموجه</span></div>'''
+        side_links = '<a href="/school/attendance-overview">بررسی غایبان <i class="fas fa-arrow-left"></i></a><a href="/school/requests">تأیید درخواست‌های ورود <i class="fas fa-arrow-left"></i></a><a href="/school/announcements">ارسال اطلاعیه <i class="fas fa-arrow-left"></i></a>'
+        heading = 'داشبورد مدیریت مدرسه'
+        subtitle = 'نمای یکپارچهٔ کلاس‌ها، غیبت‌ها، امتحانات و امور آموزشی؛ از همین‌جا همه چیز را دنبال کنید.'
+    elif role == 'معلم' and class_access_pending:
+        kpi_items = [('رد شده' if class_access_rejected else 'در انتظار', 'وضعیت دسترسی آموزشی', 'fa-hourglass-half'), (0, 'کلاس فعال', 'fa-school'), (0, 'ابزار کلاس', 'fa-lock'), (0, 'امتحان‌های قابل دسترسی', 'fa-file-circle-check')]
+        side_title = 'درخواست دسترسی دبیر'
+        side_desc = 'حساب شما ساخته شده و ورود به سایت فعال است؛ مدیر باید درخواست دبیری را تأیید کند و کلاس‌های تدریس را اختصاص دهد.'
+        side_stat = f'<div class="ario-hub-side-highlight"><strong>{"درخواست رد شده" if class_access_rejected else "در انتظار تأیید"}</strong><span>دسترسی کلاسی هنوز فعال نیست</span></div>'
+        side_links = '<a href="/profile">پیگیری درخواست <i class="fas fa-arrow-left"></i></a><a href="/home">رفتن به سایت اصلی <i class="fas fa-arrow-left"></i></a>'
+        heading = 'حساب دبیر · درخواست رد شده' if class_access_rejected else 'حساب دبیر · در انتظار تأیید'
+        subtitle = ('می‌توانی از بخش‌های عمومی سایت استفاده کنی؛ برای پیگیری درخواست ردشده با مدیر مدرسه تماس بگیر.' if class_access_rejected else 'می‌توانی از بخش‌های عمومی سایت استفاده کنی؛ امکانات کلاس پس از تأیید مدیر و تخصیص کلاس‌ها فعال می‌شوند.')
+    elif role == 'معلم':
+        kpi_items = [
+            (len(visible_ids), 'کلاس‌های من', 'fa-school'),
+            (total_students, 'دانش‌آموزان کلاس‌های من', 'fa-user-graduate'),
+            (today_absent_scope, 'غایب امروز', 'fa-user-xmark'),
+            (unreviewed_scope, 'غیبت در انتظار بررسی', 'fa-hourglass-half'),
+        ]
+        side_title = 'میز کار دبیر'
+        side_desc = 'فقط کلاس‌هایی که مدیر به حساب شما اختصاص داده است.'
+        side_stat = f'<div class="ario-hub-side-highlight"><strong>{today_absent_scope}</strong><span>غایب در کلاس‌های شما امروز</span></div>'
+        side_links = '<a href="/school/attendance-overview">بررسی غایبان کلاس‌ها <i class="fas fa-arrow-left"></i></a><a href="/school/exams">مدیریت امتحانات <i class="fas fa-arrow-left"></i></a><a href="/school/announcements">اطلاعیه‌های کلاس <i class="fas fa-arrow-left"></i></a>'
+        heading = 'میز کار آموزشی دبیر'
+        subtitle = 'کلاس‌های اختصاص‌یافته، فهرست غایبان و ابزارهای تدریس شما در یک صفحه.'
+    elif role == 'دانش‌آموز' and class_access_pending:
+        kpi_items = [('در انتظار', 'وضعیت درخواست کلاس', 'fa-hourglass-half'), ('—', 'کلاس فعال', 'fa-school'), (0, 'تکالیف کلاس', 'fa-book-open'), (0, 'امتحان‌های کلاس', 'fa-file-circle-check')]
+        side_title = 'درخواست عضویت کلاسی'
+        side_desc = 'حساب شما فعال است و می‌توانی از صفحه‌های عمومی سایت استفاده کنی. برای ورود به کلاس و دیدن تکالیف، نمرات، امتحانات و حضور و غیاب، تأیید مدیر لازم است.'
+        side_stat = f'<div class="ario-hub-side-highlight"><strong>{"درخواست رد شده" if class_access_rejected else "در انتظار تأیید"}</strong><span>دسترسی کلاسی هنوز فعال نیست</span></div>'
+        side_links = '<a href="/profile">پیگیری وضعیت درخواست <i class="fas fa-arrow-left"></i></a><a href="/home">رفتن به سایت اصلی <i class="fas fa-arrow-left"></i></a>'
+        heading = 'خوش آمدی به آریو'
+        subtitle = ('حساب شما برای بخش‌های عمومی فعال است؛ برای پیگیری درخواست عضویت کلاسی با مدیر مدرسه تماس بگیرید.' if class_access_rejected else 'حساب شما فعال است؛ پس از تأیید مدیر، دسترسی کلاس انتخابی و ابزارهای آموزشی فعال می‌شود.')
+    elif role == 'دانش‌آموز':
+        kpi_items = [
+            (_school_html(_school_class_label(all_classes[student_class])) if student_class in all_classes else '—', 'کلاس من', 'fa-school'),
+            (student_status, 'وضعیت امروز', 'fa-calendar-check'),
+            (sum(1 for item in portal.get('homework', []) if item.get('class_id') == student_class), 'تکالیف کلاس', 'fa-book-open'),
+            (sum(1 for item in portal.get('exams', []) if item.get('class_id') == student_class and item.get('published', True)), 'امتحان‌های کلاس', 'fa-file-circle-check'),
+        ]
+        side_title = 'برنامه امروز من'
+        side_desc = 'از این بخش می‌توانی تکالیف، امتحان‌ها و برنامهٔ کلاس خودت را پیگیری کنی.'
+        side_stat = f'<div class="ario-hub-side-highlight"><strong>{_school_html(student_status)}</strong><span>وضعیت حضور امروز</span></div>'
+        side_links = (f'<a href="/school/exams">امتحانات پیش رو <i class="fas fa-arrow-left"></i></a><a href="/school/homework/{_school_html(student_class)}">تکالیف کلاس <i class="fas fa-arrow-left"></i></a><a href="/school/timetable/{_school_html(student_class)}">برنامه هفتگی <i class="fas fa-arrow-left"></i></a>' if student_class else '')
+        heading = 'داشبورد دانش‌آموزی'
+        subtitle = 'کلاس، حضور امروز و دسترسی به برنامهٔ آموزشی خودت.'
+    else:
+        kpi_items = [(0, 'کلاس‌های در دسترس', 'fa-school'), (0, 'فعالیت‌ها', 'fa-book')]
+        side_title = 'مدرسه‌یار آریو'
+        side_desc = 'برای دسترسی آموزشی با مدیر مدرسه هماهنگ کنید.'
+        side_stat = ''
+        side_links = ''
+        heading = 'مدرسه‌یار آریو'
+        subtitle = 'سامانهٔ آموزشی مدرسه.'
+
+    kpi_html = ''.join(
+        f'''<article class="ario-hub-kpi"><span class="ario-hub-kpi-icon"><i class="fas {_school_html(icon)}"></i></span><strong>{value}</strong><small>{_school_html(label)}</small></article>'''
+        for value, label, icon in kpi_items
+    )
+
+    grade_filter_buttons = '<button type="button" class="ario-hub-filter active" data-grade-filter="all">همه پایه‌ها</button><button type="button" class="ario-hub-filter" data-grade-filter="7">هفتم</button><button type="button" class="ario-hub-filter" data-grade-filter="8">هشتم</button><button type="button" class="ario-hub-filter" data-grade-filter="9">نهم</button>'
+    if role == 'دانش‌آموز':
+        grade_filter_buttons = '<span class="ario-hub-filter-note">فضای اختصاصی دانش‌آموز</span>'
+
+    top_actions = '<a class="ario-school-btn" href="/home"><i class="fas fa-house"></i> سایت اصلی</a>'
+    if is_admin:
+        top_actions += '<a class="ario-school-btn primary" href="/school/announcements"><i class="fas fa-plus"></i> اطلاعیه جدید</a>'
+    elif role == 'معلم' and not class_access_pending:
+        top_actions += '<a class="ario-school-btn primary" href="/school/announcements"><i class="fas fa-bullhorn"></i> اطلاعیه کلاس</a>'
+
+    style = r'''<style id="ario-school-hub-premium-style">
+    .ario-school-dashboard{--hub-line:rgba(157,192,234,.16);--hub-muted:#9fb5cf}
+    .ario-school-dashboard .ario-school-hero{padding:clamp(24px,4vw,44px);border-radius:30px;background:radial-gradient(circle at 10% 0%,rgba(114,223,199,.16),transparent 28%),radial-gradient(circle at 88% 8%,rgba(94,151,231,.27),transparent 34%),linear-gradient(130deg,#102f4d,#07182b 74%);}
+    .ario-hub-hero-line{display:flex;align-items:center;justify-content:space-between;gap:18px;flex-wrap:wrap}.ario-hub-identity{display:flex;align-items:center;gap:10px;color:#c6d9ef;font-size:.78rem}.ario-hub-live-dot{width:8px;height:8px;border-radius:50%;background:#70e1bf;box-shadow:0 0 0 5px rgba(112,225,191,.12)}.ario-hub-date{color:#9fb9d3;font-size:.76rem}
+    .ario-hub-hero-bottom{display:flex;align-items:center;justify-content:space-between;gap:15px;flex-wrap:wrap;margin-top:22px}.ario-hub-role-pill{display:inline-flex;align-items:center;gap:8px;padding:8px 12px;border:1px solid rgba(151,190,229,.22);border-radius:999px;background:rgba(255,255,255,.055);color:#d9e8f8;font-size:.75rem;font-weight:800}
+    .ario-hub-kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:13px;margin:20px 0 25px}.ario-hub-kpi{position:relative;overflow:hidden;display:flex;align-items:center;gap:13px;min-width:0;padding:18px;border-radius:19px;background:linear-gradient(145deg,#133653,#091f36);border:1px solid var(--hub-line);box-shadow:0 13px 30px rgba(0,0,0,.1)}.ario-hub-kpi:after{content:'';position:absolute;width:80px;height:80px;left:-25px;bottom:-40px;border-radius:50%;background:rgba(113,224,199,.055)}.ario-hub-kpi-icon{width:43px;height:43px;flex:0 0 43px;display:grid;place-items:center;border-radius:14px;color:#8de5d0;background:rgba(116,222,202,.1);border:1px solid rgba(116,222,202,.15)}.ario-hub-kpi strong{display:block;max-width:100%;overflow-wrap:anywhere;color:#f1f7ff;font-size:1.35rem;line-height:1.5}.ario-hub-kpi small{display:block;color:#9fb8d2;font-size:.7rem;line-height:1.6}
+    .ario-hub-layout{display:block}.ario-hub-main,.ario-hub-aside{min-width:0}.ario-hub-aside{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;align-items:stretch;margin:0 0 18px}.ario-hub-side-card{margin:0;height:100%}.ario-hub-block{padding:19px;border-radius:22px;background:linear-gradient(150deg,rgba(15,44,70,.86),rgba(7,25,43,.92));border:1px solid var(--hub-line);box-shadow:0 15px 38px rgba(0,0,0,.09);margin-bottom:18px}.ario-hub-block-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:15px}.ario-hub-block-head h2{margin:0;color:#f1f6fd;font-size:1.08rem}.ario-hub-block-head p{margin:5px 0 0;color:#91abc7;font-size:.73rem;line-height:1.8}
+    .ario-hub-toolbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:12px 0 15px}.ario-hub-search{position:relative;flex:1;min-width:200px}.ario-hub-search i{position:absolute;right:13px;top:50%;transform:translateY(-50%);color:#8ba9c8}.ario-hub-search input{width:100%;min-width:0;padding:11px 39px 11px 12px;border:1px solid var(--hub-line);border-radius:12px;background:#081d32;color:#eff6ff;font:inherit;font-size:.78rem;outline:none}.ario-hub-search input:focus{border-color:rgba(117,225,204,.55);box-shadow:0 0 0 3px rgba(117,225,204,.08)}.ario-hub-filters{display:flex;gap:6px;flex-wrap:wrap}.ario-hub-filter{border:1px solid var(--hub-line);border-radius:999px;padding:8px 11px;background:rgba(255,255,255,.035);color:#a9bfd7;font:inherit;font-size:.7rem;font-weight:800;cursor:pointer}.ario-hub-filter.active{background:linear-gradient(110deg,#79e5cc,#9bc8ff);border-color:transparent;color:#08243a}.ario-hub-filter-note{font-size:.72rem;color:#9fb5cf;padding:8px}
+    .ario-hub-grade{margin:11px 0;border:1px solid var(--hub-line);border-radius:16px;overflow:hidden;background:rgba(255,255,255,.025)}.ario-hub-grade>summary{list-style:none;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 15px;cursor:pointer;background:linear-gradient(100deg,rgba(113,223,199,.075),rgba(115,160,221,.06));color:#eef6ff;font-weight:900}.ario-hub-grade>summary::-webkit-details-marker{display:none}.ario-hub-grade>summary>i{color:#8de6d0;transition:transform .2s}.ario-hub-grade[open]>summary>i{transform:rotate(180deg)}.ario-hub-grade-title{display:flex;align-items:center;gap:11px}.ario-hub-grade-mark{width:35px;height:35px;display:grid;place-items:center;border-radius:11px;background:rgba(115,221,199,.11);color:#91ead4;font-size:1rem}.ario-hub-grade-title small{display:block;margin-top:2px;color:#90a9c4;font-size:.65rem;font-weight:600}
+    .ario-hub-grade-content{padding:9px}.ario-hub-class-row{display:grid;grid-template-columns:48px minmax(0,1fr) auto;align-items:center;gap:12px;padding:13px;margin:7px 0;border:1px solid rgba(155,189,230,.12);border-radius:14px;background:rgba(255,255,255,.025)}.ario-hub-class-avatar{width:45px;height:45px;display:flex;align-items:center;justify-content:center;gap:2px;border-radius:14px;background:linear-gradient(145deg,rgba(112,225,191,.16),rgba(104,153,218,.12));color:#a1f0dd;font-weight:900;font-size:1rem}.ario-hub-class-avatar span{font-size:.75rem}.ario-hub-class-copy{min-width:0}.ario-hub-class-copy>strong{display:block;color:#f0f6ff;font-size:.84rem}.ario-hub-class-copy>small{display:block;margin-top:3px;color:#97aec8;font-size:.68rem}.ario-hub-class-metrics{display:flex;gap:12px;flex-wrap:wrap;margin-top:7px;color:#9fb8d2;font-size:.65rem}.ario-hub-class-metrics i{color:#8de2ce;margin-left:3px}.ario-hub-class-actions{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}.ario-hub-class-actions .ario-school-btn{padding:8px 10px;font-size:.68rem}
+    .ario-hub-module-list{display:grid;gap:9px}.ario-hub-module{display:grid;grid-template-columns:43px minmax(0,1fr) auto;align-items:center;gap:11px;padding:12px;border:1px solid rgba(155,189,230,.12);border-radius:15px;background:rgba(255,255,255,.025);text-decoration:none;transition:transform .18s,border-color .18s,background .18s}.ario-hub-module:hover{transform:translateY(-2px);border-color:rgba(123,222,207,.34);background:rgba(255,255,255,.05)}.ario-hub-module-icon{width:41px;height:41px;display:grid;place-items:center;border-radius:13px;background:rgba(120,174,230,.11);color:#9be5d7}.ario-hub-module-copy{min-width:0}.ario-hub-module-copy small,.ario-hub-module-copy strong,.ario-hub-module-copy em{display:block}.ario-hub-module-copy small{color:#8daac7;font-size:.58rem;letter-spacing:1px}.ario-hub-module-copy strong{margin:2px 0;color:#eff6ff;font-size:.78rem}.ario-hub-module-copy em{color:#9bb2cb;font-size:.65rem;font-style:normal;line-height:1.7}.ario-hub-module-meta{display:flex;align-items:center;gap:7px;color:#8de3d0;font-size:.65rem;white-space:nowrap}.ario-hub-module-meta i{font-size:.6rem}
+    .ario-hub-side-card{padding:18px;border:1px solid var(--hub-line);border-radius:20px;background:radial-gradient(circle at 100% 0,rgba(114,223,199,.1),transparent 40%),linear-gradient(145deg,#123653,#081d32);margin-bottom:14px}.ario-hub-side-card h3{margin:0 0 7px;color:#f1f6fd;font-size:.95rem}.ario-hub-side-card p{margin:0;color:#9fb6cf;font-size:.7rem;line-height:1.9}.ario-hub-side-stat{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:14px}.ario-hub-side-stat strong{color:#91ead4;font-size:1.05rem}.ario-hub-side-stat span{color:#a8bed6;font-size:.69rem;margin-left:9px}.ario-hub-side-highlight{display:flex;align-items:baseline;gap:10px;margin-top:15px}.ario-hub-side-highlight strong{color:#91ead4;font-size:1.7rem}.ario-hub-side-highlight span{color:#a8bed6;font-size:.7rem}.ario-hub-side-links{display:grid;gap:8px;margin-top:15px}.ario-hub-side-links a{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 11px;border:1px solid rgba(155,189,230,.12);border-radius:11px;color:#dce9f7;text-decoration:none;font-size:.72rem}.ario-hub-side-links a i{color:#8de3d0}
+    .ario-hub-notices{display:grid;gap:9px}.ario-hub-notice{padding:13px;border:1px solid rgba(155,189,230,.13);border-radius:14px;background:rgba(255,255,255,.025)}.ario-hub-notice>span{display:inline-flex;margin-bottom:6px;padding:4px 7px;border-radius:99px;background:rgba(113,223,199,.09);color:#8fe2d0;font-size:.6rem}.ario-hub-notice strong{display:block;color:#edf5ff;font-size:.8rem}.ario-hub-notice p{margin:5px 0;color:#a7bdd4;font-size:.7rem;line-height:1.9;overflow-wrap:anywhere}.ario-hub-notice small{color:#809cb8;font-size:.61rem}
+    .ario-hub-hidden{display:none!important}.ario-hub-no-results{display:none;padding:18px;text-align:center;color:#9fb5cf;font-size:.76rem}
+    body[data-theme="light"] .ario-school-dashboard .ario-school-hero{background:radial-gradient(circle at 10% 0,rgba(80,181,161,.12),transparent 28%),radial-gradient(circle at 88% 8%,rgba(94,151,231,.13),transparent 34%),linear-gradient(130deg,#fff,#edf5fc 74%);border-color:#dbe6f2}
+    body[data-theme="light"] .ario-school-dashboard .ario-school-hero h1{color:#193654}body[data-theme="light"] .ario-school-dashboard .ario-school-hero p{color:#5e738d}
+    body[data-theme="light"] .ario-hub-kpi,body[data-theme="light"] .ario-hub-block,body[data-theme="light"] .ario-hub-side-card{background:linear-gradient(145deg,#fff,#f1f6fc);border-color:#dbe6f2;box-shadow:0 10px 26px rgba(27,54,86,.05)}body[data-theme="light"] .ario-hub-kpi strong,body[data-theme="light"] .ario-hub-block-head h2,body[data-theme="light"] .ario-hub-grade>summary,body[data-theme="light"] .ario-hub-class-copy>strong,body[data-theme="light"] .ario-hub-module-copy strong,body[data-theme="light"] .ario-hub-side-card h3,body[data-theme="light"] .ario-hub-notice strong{color:#193654}body[data-theme="light"] .ario-hub-kpi small,body[data-theme="light"] .ario-hub-block-head p,body[data-theme="light"] .ario-hub-class-copy>small,body[data-theme="light"] .ario-hub-class-metrics,body[data-theme="light"] .ario-hub-module-copy em,body[data-theme="light"] .ario-hub-side-card p,body[data-theme="light"] .ario-hub-notice p{color:#637993}body[data-theme="light"] .ario-hub-grade,body[data-theme="light"] .ario-hub-class-row,body[data-theme="light"] .ario-hub-module,body[data-theme="light"] .ario-hub-notice{background:#f8fbfe;border-color:#dbe6f2}body[data-theme="light"] .ario-hub-grade>summary{background:#eef5fb}body[data-theme="light"] .ario-hub-module-meta{color:#287d70}body[data-theme="light"] .ario-hub-side-links a{color:#274563;border-color:#dbe6f2}
+    @media(max-width:980px){.ario-hub-layout{display:block}.ario-hub-aside{grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.ario-hub-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
+    @media(max-width:650px){.ario-hub-kpis{gap:8px}.ario-hub-kpi{padding:12px;gap:8px}.ario-hub-kpi-icon{width:35px;height:35px;flex-basis:35px;border-radius:11px}.ario-hub-kpi strong{font-size:1.05rem}.ario-hub-layout{gap:12px}.ario-hub-aside{grid-template-columns:1fr}.ario-hub-block{padding:13px;border-radius:17px}.ario-hub-class-row{grid-template-columns:40px minmax(0,1fr);gap:9px;padding:10px}.ario-hub-class-avatar{width:39px;height:39px}.ario-hub-class-actions{grid-column:1/-1;justify-content:stretch}.ario-hub-class-actions a{flex:1}.ario-hub-toolbar{align-items:stretch}.ario-hub-search{min-width:100%;flex-basis:100%}.ario-hub-filters{width:100%}.ario-hub-aside{grid-template-columns:1fr}.ario-hub-module{grid-template-columns:38px minmax(0,1fr);gap:8px}.ario-hub-module-icon{width:36px;height:36px}.ario-hub-module-meta{grid-column:2;justify-content:space-between}.ario-hub-hero-bottom{align-items:flex-start}.ario-hub-block-head{align-items:flex-start}}
+    </style>'''
+
+    script = r'''<script>
+    (function(){
+      const root=document.querySelector('[data-ario-school-hub]');
+      if(!root)return;
+      const search=root.querySelector('[data-school-class-search]');
+      const gradeButtons=[...root.querySelectorAll('[data-grade-filter]')];
+      const classCards=[...root.querySelectorAll('[data-school-class-card]')];
+      const gradeGroups=[...root.querySelectorAll('[data-school-grade-group]')];
+      const empty=root.querySelector('[data-school-empty-filter]');
+      let activeGrade='all';
+
+      function normalize(value){
+        return String(value==null?'':value)
+          .toLocaleLowerCase('fa-IR')
+          .replace(/[يى]/g,'ی').replace(/ك/g,'ک')
+          .replace(/[ۀة]/g,'ه')
+          .replace(/[ًٌٍَُِّْـ]/g,'')
+          .replace(/[۰-۹]/g,d=>String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)))
+          .replace(/[٠-٩]/g,d=>String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)))
+          .replace(/[‌‏‪-‮]/g,' ')
+          .replace(/[ـ،؛:|]+/g,' ')
+          .replace(/\s+/g,' ').trim();
+      }
+      function compact(value){return normalize(value).replace(/[\s\-_/\.]+/g,'');}
+      function matchesSearch(card, query){
+        if(!query)return true;
+        const indexed=normalize((card.getAttribute('data-search')||'')+' '+(card.innerText||card.textContent||''));
+        const tokens=query.split(' ').filter(Boolean);
+        // Match all terms independently, so e.g. "کلاس نهم ۳" works even
+        // when those words occur in different parts of the card's search index.
+        const allTokens=tokens.every(token=>indexed.includes(token));
+        if(allTokens)return true;
+        // Accept common compact forms: 9/3, ۹-۳, 93 and ۹۳.
+        const compactQuery=compact(query);
+        const compactIndex=compact(indexed);
+        if(compactQuery.length>=2 && compactIndex.includes(compactQuery))return true;
+        // For queries combining a grade name/number and a section word/digit,
+        // compare the corresponding class id irrespective of separators.
+        const gradeAliases=[['هفتم','هفت','7'],['هشتم','هشت','8'],['نهم','نه','9']];
+        const sectionAliases=[['اول','اولی','یک','یکم','1'],['دوم','دومی','دو','2'],['سوم','سومی','سه','3'],['چهارم','چهارمی','چهار','4'],['پنجم','پنجمی','پنج','5']];
+        const cardGrade=card.getAttribute('data-grade-number')||'';
+        const cardSection=(card.getAttribute('data-class-section')||'');
+        const hasGrade=gradeAliases.some(group=>group.some(alias=>query.includes(normalize(alias))) && group.includes(cardGrade));
+        const hasSection=sectionAliases.some(group=>group.some(alias=>query.split(' ').includes(normalize(alias)) || (normalize(alias).length===1 && new RegExp('(^|\\D)'+normalize(alias)+'($|\\D)').test(query))) && group.includes(cardSection));
+        return hasGrade && hasSection;
+      }
+      function applyFilters(){
+        const query=normalize(search&&search.value?search.value:'');
+        let visibleCount=0;
+        classCards.forEach(card=>{
+          const grade=card.getAttribute('data-grade-number')||'';
+          const matchGrade=activeGrade==='all'||grade===activeGrade;
+          const matchText=matchesSearch(card,query);
+          const visible=matchGrade&&matchText;
+          card.classList.toggle('ario-hub-hidden',!visible);
+          if(visible)visibleCount++;
+        });
+        gradeGroups.forEach(group=>{
+          const visible=[...group.querySelectorAll('[data-school-class-card]')].some(card=>!card.classList.contains('ario-hub-hidden'));
+          group.classList.toggle('ario-hub-hidden',!visible);
+          if(visible && query)group.open=true;
+        });
+        if(empty)empty.style.display=visibleCount?'none':'block';
+        if(search)search.setAttribute('aria-label',visibleCount+' کلاس پیدا شد');
+      }
+      if(search){
+        search.addEventListener('input',function(){
+          // A new text search should not be accidentally constrained by an old grade filter.
+          if(search.value.trim()){
+            activeGrade='all';
+            gradeButtons.forEach(button=>button.classList.toggle('active',(button.getAttribute('data-grade-filter')||'all')==='all'));
+          }
+          applyFilters();
+        });
+        search.addEventListener('change',applyFilters);
+        search.addEventListener('search',applyFilters);
+      }
+      gradeButtons.forEach(button=>button.addEventListener('click',()=>{
+        activeGrade=button.getAttribute('data-grade-filter')||'all';
+        gradeButtons.forEach(item=>item.classList.toggle('active',item===button));
+        applyFilters();
+      }));
+      applyFilters();
+    })();
+    </script>'''
+
+    kpi_block = f'<section class="ario-hub-kpis">{kpi_html}</section>'
+    class_block = f'''<section class="ario-hub-block" id="school-class-browser"><div class="ario-hub-block-head"><div><h2>ساختار کلاس‌ها</h2><p>{'همهٔ کلاس‌های مدرسه، مرتب‌شده بر اساس پایه' if is_admin else ('کلاس‌های تخصیص‌یافته به شما' if role == 'معلم' else 'کلاس اختصاصی شما')}</p></div><span class="ario-school-chip">{len(visible_ids)} کلاس</span></div>
+      <div class="ario-hub-toolbar"><label class="ario-hub-search"><i class="fas fa-search"></i><input type="search" data-school-class-search placeholder="مثلاً: هفتم ۱، هشتم سه، ۹-۳ یا کلاس نهم…" aria-label="جست‌وجوی کلاس"></label><div class="ario-hub-filters">{grade_filter_buttons}</div></div>
+      {class_tree_html}<div class="ario-hub-no-results" data-school-empty-filter>کلاسی با این عبارت پیدا نشد.</div></section>'''
+    modules_block = f'''<section class="ario-hub-block"><div class="ario-hub-block-head"><div><h2>مرکز ابزارهای مدرسه</h2><p>هر امکان در یک جای مشخص؛ برای انجام کار روی کارت مربوطه بزنید.</p></div></div><div class="ario-hub-module-list">{tile_html or '<div class="ario-school-empty">ابزاری برای نقش کاربری شما تعریف نشده است.</div>'}</div></section>'''
+    side_block = f'''<aside class="ario-hub-aside"><section class="ario-hub-side-card"><h3>{side_title}</h3><p>{side_desc}</p>{side_stat}<nav class="ario-hub-side-links">{side_links}</nav></section><section class="ario-hub-side-card"><h3>تابلوی اطلاعیه‌ها</h3><p>آخرین پیام‌های مرتبط با نقش و کلاس‌های شما.</p><div class="ario-hub-notices" style="margin-top:13px">{announcement_cards}</div><div style="margin-top:12px"><a class="ario-school-btn" href="/school/announcements">مشاهده همه اطلاعیه‌ها</a></div></section></aside>'''
+    content = f'''{style}<main class="ario-school-wrap ario-school-dashboard" data-ario-school-hub>
+      <section class="ario-school-hero"><div class="ario-hub-hero-line"><div class="ario-school-eyebrow">ARIO SMART SCHOOL · CONTROL CENTER</div><div class="ario-hub-identity"><span class="ario-hub-live-dot"></span><span>سامانه آموزشی آریو</span><span class="ario-hub-date">{_school_html(today_fa)}</span></div></div>
+        <h1>{heading}</h1><p>{subtitle}</p><div class="ario-hub-hero-bottom"><span class="ario-hub-role-pill"><i class="fas fa-user-shield"></i> {_school_html(username)} · {_school_html(role)}</span><div class="ario-school-actions">{top_actions}</div></div>
+      </section>
+      {kpi_block}
+      {side_block}
+      {class_block}
+      {modules_block}
+    </main>{script}'''
     return _school_page(content, 'مدرسه‌یار', 'school')
 
 
@@ -7018,7 +7796,7 @@ def ario_school_class(class_id):
         student_options = ''.join(f'<option value="{_school_html(u)}">{_school_html(u)}</option>' for u, _ in available_students) or '<option value="">دانش‌آموز آزاد وجود ندارد</option>'
         teacher_remove = ''.join(f'<form method="post" action="/school/remove-teacher/{class_id}" style="display:inline-flex;gap:6px;align-items:center;margin:4px"><input type="hidden" name="csrf_token" value="{_school_html(_school_csrf())}"><input type="hidden" name="username" value="{_school_html(name)}"><span class="ario-school-chip">{_school_html(name)}</span><button class="ario-school-btn danger" type="submit">برداشتن</button></form>' for name in teacher_names)
         admin_panels = f'''<section class="ario-school-panel"><h3>اختصاص دبیر به کلاس · {len(teacher_names)}/{SCHOOL_TEACHER_LIMIT_PER_CLASS}</h3><div>{teacher_remove}</div><form method="post" action="/school/assign-teacher/{class_id}"><input type="hidden" name="csrf_token" value="{_school_html(_school_csrf())}"><div class="ario-school-form-grid"><label class="ario-school-field">انتخاب دبیر دارای حساب کاربری<select name="teacher_username" required>{teacher_options}</select></label></div><div class="ario-school-form-actions"><button class="ario-school-btn primary" type="submit" {'disabled' if len(teacher_names)>=SCHOOL_TEACHER_LIMIT_PER_CLASS or not teachers else ''}>افزودن دبیر به کلاس</button></div></form><small style="color:#9fb5cf">برای هر کلاس امکان اختصاص حداکثر ۱۳ دبیر وجود دارد. ابتدا حساب دبیر را از پنل مدیریت کاربران بسازید.</small></section><section class="ario-school-panel"><h3>افزودن دانش‌آموز ثبت‌نام‌شده</h3><form method="post" action="/school/assign-student/{class_id}"><input type="hidden" name="csrf_token" value="{_school_html(_school_csrf())}"><div class="ario-school-form-grid"><label class="ario-school-field">انتخاب حساب دانش‌آموز آزاد<select name="username" required>{student_options}</select></label></div><div class="ario-school-form-actions"><button class="ario-school-btn primary" type="submit" {'disabled' if not available_students else ''}>ثبت در این کلاس</button></div></form><h3 style="margin-top:22px">ساخت حساب دانش‌آموز جدید</h3><form method="post" action="/school/create-student/{class_id}"><input type="hidden" name="csrf_token" value="{_school_html(_school_csrf())}"><div class="ario-school-form-grid"><label class="ario-school-field">نام کاربری<input name="username" minlength="3" maxlength="32" required></label><label class="ario-school-field">رمز اولیه<input type="password" name="password" minlength="8" required autocomplete="new-password"></label></div><div class="ario-school-form-actions"><button class="ario-school-btn primary" type="submit">ساخت حساب و افزودن به کلاس</button></div></form></section>'''
-    actions = f'''<div class="ario-school-grid"><a class="ario-school-card" href="/school/attendance/{class_id}"><div class="ario-school-card-top"><span>ATTENDANCE</span><i class="fas fa-calendar-check"></i></div><h3>حضور و غیاب</h3><p>ثبت و مشاهده حضور روزانه</p></a><a class="ario-school-card" href="/school/grades/{class_id}"><div class="ario-school-card-top"><span>GRADES</span><i class="fas fa-chart-line"></i></div><h3>دفتر نمره</h3><p>ثبت آزمون و نمره دانش‌آموزان</p></a><a class="ario-school-card" href="/school/homework/{class_id}"><div class="ario-school-card-top"><span>HOMEWORK</span><i class="fas fa-book-open"></i></div><h3>تکالیف</h3><p>تعریف تکلیف و دریافت پاسخ</p></a><a class="ario-school-card" href="/school/timetable/{class_id}"><div class="ario-school-card-top"><span>TIMETABLE</span><i class="fas fa-clock"></i></div><h3>برنامه هفتگی</h3><p>تنظیم زنگ‌ها و درس‌های کلاس</p></a><a class="ario-school-card" href="/school/exams"><div class="ario-school-card-top"><span>EXAMS</span><i class="fas fa-file-circle-check"></i></div><h3>امتحانات آنلاین</h3><p>ساخت یا شرکت در آزمون‌های این کلاس</p></a></div>'''
+    actions = f'''<div class="ario-school-grid"><a class="ario-school-card" href="/school/attendance/{class_id}"><div class="ario-school-card-top"><span>ATTENDANCE</span><i class="fas fa-calendar-check"></i></div><h3>دفتر حضور و غیاب</h3><p>ثبت رسمی حضور؛ مشاهده و تعیین وضعیت غیبت‌ها</p></a><a class="ario-school-card" href="/school/grades/{class_id}"><div class="ario-school-card-top"><span>GRADES</span><i class="fas fa-chart-line"></i></div><h3>دفتر نمره</h3><p>ثبت آزمون و نمره دانش‌آموزان</p></a><a class="ario-school-card" href="/school/homework/{class_id}"><div class="ario-school-card-top"><span>HOMEWORK</span><i class="fas fa-book-open"></i></div><h3>تکالیف</h3><p>تعریف تکلیف و دریافت پاسخ</p></a><a class="ario-school-card" href="/school/timetable/{class_id}"><div class="ario-school-card-top"><span>TIMETABLE</span><i class="fas fa-clock"></i></div><h3>برنامه هفتگی</h3><p>تنظیم زنگ‌ها و درس‌های کلاس</p></a><a class="ario-school-card" href="/school/exams"><div class="ario-school-card-top"><span>EXAMS</span><i class="fas fa-file-circle-check"></i></div><h3>امتحانات آنلاین</h3><p>ساخت یا شرکت در آزمون‌های این کلاس</p></a></div>'''
     teacher_manage = f'<section class="ario-school-panel"><h3>دبیران اختصاص‌یافته</h3><ul style="padding-right:20px;line-height:2.2;color:#c4d7ec">{teacher_list}</ul></section>'
     if is_admin or session.get('role') == 'معلم':
         roster_html = f'''<section class="ario-school-panel"><h3>فهرست دانش‌آموزان · {len(students)} نفر</h3><div class="ario-school-table-wrap"><table class="ario-school-table"><thead><tr><th>ردیف</th><th>نام کاربری</th><th>نقش</th>{'<th>مدیریت</th>' if is_admin else ''}</tr></thead><tbody>{roster}</tbody></table></div></section>'''
@@ -7068,6 +7846,16 @@ def ario_school_assign_student(class_id):
     account = data.get('users', {}).get(username)
     if account and account.get('role') == 'دانش‌آموز' and not account.get('school_class_id'):
         account['school_class_id'] = class_id
+        account['class_access_approved'] = True
+        account['class_access_status'] = 'approved'
+        account['approved_by'] = session.get('username')
+        account['approved_at'] = _school_now().strftime('%Y-%m-%d %H:%M')
+        account.pop('requested_class_id', None)
+        for enrollment in portal.get('enrollment_requests', []):
+            if enrollment.get('username') == username and enrollment.get('status') == 'pending':
+                enrollment['status'] = 'approved'
+                enrollment['decided_by'] = session.get('username')
+                enrollment['decided_at'] = _school_now().strftime('%Y-%m-%d %H:%M')
         save_data(data)
     return redirect(url_for('ario_school_class', class_id=class_id))
 
@@ -7081,7 +7869,7 @@ def ario_school_create_student(class_id):
     username = request.form.get('username', '').strip()
     password = request.form.get('password', '')
     if 3 <= len(username) <= 32 and len(password) >= 8 and username not in data.get('users', {}):
-        data['users'][username] = {'password': generate_password_hash(password), 'role': 'دانش‌آموز', 'school_class_id': class_id}
+        data['users'][username] = {'password': generate_password_hash(password), 'role': 'دانش‌آموز', 'school_class_id': class_id, 'class_access_approved': True, 'class_access_status': 'approved'}
         save_data(data)
     return redirect(url_for('ario_school_class', class_id=class_id))
 
@@ -7118,6 +7906,8 @@ def ario_school_student_checkin():
     account = data.get('users', {}).get(username, {})
     if account.get('role') != 'دانش‌آموز':
         abort(403)
+    if not _school_class_access_approved(account):
+        abort(403, description='ثبت حضور کلاسی پس از تأیید مدیر فعال می‌شود.')
     class_id = account.get('school_class_id')
     if not class_id or class_id not in portal.get('classes', {}):
         abort(403, description='هنوز کلاسی به حساب شما اختصاص داده نشده است.')
@@ -7142,56 +7932,132 @@ def ario_school_student_checkin():
 
 @app.route('/school/attendance-overview')
 def ario_school_attendance_overview():
-    # Admin-only school-wide daily attendance report with source/verification labels.
-    if not _is_school_admin():
+    # Absence-only dashboard, grouped by grade and class for admins and assigned teachers.
+    login_redirect = _school_require_login()
+    if login_redirect:
+        return login_redirect
+    role = session.get('role')
+    if not (_is_school_admin() or role == 'معلم'):
         abort(403)
+
     data, portal = _school_load()
-    date_key = request.args.get('date', _school_now().strftime('%Y-%m-%d'))
-    try:
-        datetime.strptime(date_key, '%Y-%m-%d')
-    except ValueError:
-        date_key = _school_now().strftime('%Y-%m-%d')
+    if role == 'معلم' and not _school_class_access_approved(data.get('users', {}).get(session.get('username', ''), {})):
+        abort(403)
+    if _is_school_admin():
+        visible_ids = set(portal.get('classes', {}).keys())
+    else:
+        visible_ids = set(_school_teacher_classes(portal, session.get('username', '')))
+
+    date_key = _ario_parse_school_date(request.args.get('date', ''), default=_school_now().strftime('%Y-%m-%d'))
 
     records = portal.get('attendance', {}).get(date_key, {})
-    totals = {'حاضر': 0, 'غایب': 0, 'تأخیر': 0, 'موجه': 0, 'ثبت‌نشده': 0}
-    class_sections = []
-    class_items = sorted(
-        portal.get('classes', {}).items(),
-        key=lambda pair: (pair[1].get('grade_number', 99), int(str(pair[0]).split('-')[-1]))
-    )
-    for class_id, cls in class_items:
-        day = records.get(class_id, {})
-        students = _school_class_students(data, class_id)
-        present = sum(1 for student in students if day.get(student, {}).get('status') == 'حاضر')
-        absent = sum(1 for student in students if day.get(student, {}).get('status') == 'غایب')
-        late = sum(1 for student in students if day.get(student, {}).get('status') == 'تأخیر')
-        excused = sum(1 for student in students if day.get(student, {}).get('status') == 'موجه')
-        unreported = sum(1 for student in students if student not in day)
-        totals['حاضر'] += present
-        totals['غایب'] += absent
-        totals['تأخیر'] += late
-        totals['موجه'] += excused
-        totals['ثبت‌نشده'] += unreported
-        rows = []
-        for index, student in enumerate(students, 1):
-            item = day.get(student, {})
-            status = item.get('status', 'ثبت‌نشده')
-            source = item.get('source', 'teacher_or_admin') if item else ''
-            source_label = 'خوداظهاری · تأییدنشده' if source == 'student_self_report' else ('ثبت دبیر/مدیر · رسمی' if item else 'هنوز ثبت نشده')
-            timestamp = item.get('submitted_at') or item.get('updated_at') or '—'
-            student_account = data.get('users', {}).get(student, {})
-            display_student = student_account.get('full_name') or student
-            rows.append(
-                f'<tr><td>{index}</td><td>{_school_html(display_student)}<br><small>{_school_html(student)}</small></td><td>{_school_html(status)}</td>'
-                f'<td>{_school_html(source_label)}</td><td>{_school_html(timestamp)}</td></tr>'
-            )
-        class_sections.append(
-            f'''<section class="ario-school-panel"><div class="ario-school-section-head"><div><h2>{_school_html(_school_class_label(cls))}</h2><p>{len(students)} دانش‌آموز · حاضر {present} · غایب {absent} · ثبت‌نشده {unreported}</p></div><a class="ario-school-btn" href="/school/attendance/{_school_html(class_id)}?date={_school_html(date_key)}">بازبینی و اصلاح</a></div><div class="ario-school-table-wrap"><table class="ario-school-table"><thead><tr><th>ردیف</th><th>دانش‌آموز</th><th>وضعیت</th><th>منبع ثبت</th><th>زمان</th></tr></thead><tbody>{''.join(rows) or '<tr><td colspan="5">هنوز دانش‌آموزی به این کلاس اختصاص داده نشده است.</td></tr>'}</tbody></table></div></section>'''
-        )
-
     token = _school_csrf()
-    content = f'''<main class="ario-school-wrap"><a class="ario-school-back" href="/school">بازگشت به مدرسه‌یار</a><section class="ario-school-hero"><span class="ario-school-eyebrow">SCHOOL-WIDE ATTENDANCE · ARIO</span><h1>گزارش حضور و غیاب مدرسه</h1><p>گزارش تمام ۱۳ کلاس در یک صفحه؛ ثبت دانش‌آموز با برچسب خوداظهاری مشخص است و ثبت رسمی دبیر یا مدیر از آن جدا نمایش داده می‌شود.</p><form method="get" class="ario-school-form-actions"><label class="ario-school-field">انتخاب تاریخ<input type="date" name="date" value="{_school_html(date_key)}"></label><button class="ario-school-btn primary" type="submit">نمایش گزارش</button></form></section><section class="ario-school-kpis"><div class="ario-school-kpi"><strong>{totals['حاضر']}</strong><span>اعلام حضور</span></div><div class="ario-school-kpi"><strong>{totals['غایب']}</strong><span>اعلام غیبت</span></div><div class="ario-school-kpi"><strong>{totals['تأخیر']}</strong><span>تأخیر ثبت‌شده</span></div><div class="ario-school-kpi"><strong>{totals['ثبت‌نشده']}</strong><span>بدون ثبت وضعیت</span></div></section><div class="ario-school-notice">توجه: انتخاب «حاضر» یا «غایب» توسط دانش‌آموز، خوداظهاری است و به‌تنهایی حضور فیزیکی را اثبات نمی‌کند. دبیر یا مدیر می‌تواند آن را بررسی و در دفتر رسمی اصلاح کند.</div><p style="color:#9fb5cf;font-size:.75rem">این گزارش هر ۲۰ ثانیه به‌صورت خودکار تازه می‌شود.</p>{''.join(class_sections)}<script>window.setInterval(function(){{ if(!document.hidden) window.location.reload(); }},20000);</script></main>'''
-    return _school_page(content, 'گزارش حضور و غیاب')
+    totals = {'غایب': 0, 'در انتظار بررسی': 0, 'موجه': 0, 'غیرموجه': 0}
+    grade_sections = []
+
+    for grade_number, grade_name, _section_count in SCHOOL_GRADE_CONFIG:
+        grade_classes = []
+        grade_absent = 0
+        for class_id, cls in sorted(
+            portal.get('classes', {}).items(),
+            key=lambda pair: int(str(pair[0]).split('-')[-1])
+        ):
+            if class_id not in visible_ids or _school_grade_number(cls.get('grade_number'), class_id) != int(grade_number):
+                continue
+            day = records.get(class_id, {})
+            students = _school_class_students(data, class_id)
+            absent_students = []
+            for student in students:
+                item = day.get(student, {})
+                if not isinstance(item, dict):
+                    continue
+                # Legacy status "موجه" is treated as an excused absence as well.
+                if item.get('status') not in ('غایب', 'موجه'):
+                    continue
+                classification = item.get('absence_classification')
+                if classification not in SCHOOL_ABSENCE_CLASSIFICATIONS:
+                    classification = 'موجه' if item.get('status') == 'موجه' else 'در انتظار بررسی'
+                totals['غایب'] += 1
+                totals[classification] += 1
+                grade_absent += 1
+                account = data.get('users', {}).get(student, {})
+                display_name = account.get('full_name') or account.get('name') or student
+                source_label = 'خوداظهاری دانش‌آموز · نیازمند بررسی' if item.get('source') == 'student_self_report' else 'ثبت رسمی دبیر یا مدیر'
+                time_label = item.get('submitted_at') or item.get('updated_at') or '—'
+                classified_by = item.get('absence_classified_by')
+                classified_at = item.get('absence_classified_at')
+                classification_meta = (f'تعیین‌شده توسط {_school_html(classified_by)} · {_school_html(_ario_shamsi_date(classified_at))}' if classified_by else 'هنوز توسط مدیر یا دبیر تعیین نشده')
+                tag_class = 'pending' if classification == 'در انتظار بررسی' else ('excused' if classification == 'موجه' else 'unexcused')
+                options = ''.join(
+                    f'<option value="{_school_html(option)}" {"selected" if option == classification else ""}>{_school_html(option)}</option>'
+                    for option in SCHOOL_ABSENCE_CLASSIFICATIONS
+                )
+                classify_form = f'''<form class="ario-school-absence-form" method="post" action="/school/absence-classification"><input type="hidden" name="csrf_token" value="{_school_html(token)}"><input type="hidden" name="class_id" value="{_school_html(class_id)}"><input type="hidden" name="student_username" value="{_school_html(student)}"><input type="hidden" name="date" value="{_school_html(_ario_shamsi_date(date_key))}"><select name="classification" aria-label="نوع غیبت برای {_school_html(display_name)}">{options}</select><button class="ario-school-btn primary" type="submit">ثبت</button></form>'''
+                absent_students.append(
+                    f'''<article class="ario-school-absence-row"><div class="ario-school-absence-person"><strong>{_school_html(display_name)}</strong><small>{_school_html(student)} · {_school_html(source_label)} · {_school_html(_ario_shamsi_date(time_label))}<br>{classification_meta}</small><div class="ario-school-absence-meta"><span class="ario-school-absence-tag">غایب</span><span class="ario-school-absence-tag {tag_class}">{_school_html(classification)}</span></div></div>{classify_form}</article>'''
+                )
+
+            absent_html = ''.join(absent_students) or '<div class="ario-school-empty">برای این کلاس در تاریخ انتخاب‌شده غیبتی ثبت نشده است.</div>'
+            grade_classes.append(
+                f'''<details class="ario-school-class-fold"><summary><span>{_school_html(_school_class_label(cls))}</span><span class="ario-school-grade-meta">{len(absent_students)} غایب</span></summary><div class="ario-school-absence-list">{absent_html}</div></details>'''
+            )
+
+        if grade_classes:
+            grade_sections.append(
+                f'''<details class="ario-school-grade-group"><summary><span>پایه {_school_html(grade_name)}</span><span class="ario-school-grade-meta">{len(grade_classes)} کلاس · {grade_absent} غایب</span></summary><div class="ario-school-grade-body">{''.join(grade_classes)}</div></details>'''
+            )
+
+    if not grade_sections:
+        grade_html = '<div class="ario-school-empty">هنوز کلاسی به حساب شما اختصاص داده نشده است.</div>'
+    else:
+        grade_html = ''.join(grade_sections)
+
+    page_title = 'مرکز مدیریت غایبان' if _is_school_admin() else 'غایبان کلاس‌های من'
+    actor_hint = 'همه کلاس‌های مدرسه' if _is_school_admin() else 'فقط کلاس‌هایی که به حساب دبیر اختصاص داده شده‌اند'
+    content = f'''<main class="ario-school-wrap"><a class="ario-school-back" href="/school">بازگشت به مدرسه‌یار</a><section class="ario-school-hero"><span class="ario-school-eyebrow">ARIO · ABSENCE CENTER</span><h1>{page_title}</h1><p>فقط دانش‌آموزانی نمایش داده می‌شوند که برای این تاریخ وضعیت غیبت دارند. پایه‌ها و کلاس‌ها به‌صورت شاخه‌ای مرتب شده‌اند. {actor_hint}.</p><form method="get" class="ario-school-form-actions"><label class="ario-school-field">تاریخ بررسی<input type="text" name="date" inputmode="numeric" autocomplete="off" placeholder="۱۴۰۵/۰۸/۳۰" title="تاریخ شمسی؛ نمونه ۱۴۰۵/۰۸/۳۰" pattern="[0-9۰-۹٠-٩]{4}[/.-][0-9۰-۹٠-٩]{1,2}[/.-][0-9۰-۹٠-٩]{1,2}" value="{_school_html(_ario_shamsi_date(date_key))}"></label><button class="ario-school-btn primary" type="submit">نمایش</button><a class="ario-school-btn" href="/school/attendance-overview">امروز</a></form></section><section class="ario-school-kpis"><div class="ario-school-kpi"><strong>{totals['غایب']}</strong><span>کل غایبان</span></div><div class="ario-school-kpi"><strong>{totals['در انتظار بررسی']}</strong><span>در انتظار تعیین وضعیت</span></div><div class="ario-school-kpi"><strong>{totals['موجه']}</strong><span>غیبت موجه</span></div><div class="ario-school-kpi"><strong>{totals['غیرموجه']}</strong><span>غیبت غیرموجه</span></div></section><div class="ario-school-notice">برای هر دانش‌آموز غایب، نوع غیبت را «موجه» یا «غیرموجه» انتخاب و ثبت کنید. خوداظهاری دانش‌آموز تا زمان بررسی، با وضعیت «در انتظار بررسی» نمایش داده می‌شود.</div><div class="ario-school-actions"><a class="ario-school-btn" href="/school/attendance-overview?date={_school_html(_ario_shamsi_date(date_key))}"><i class="fas fa-rotate"></i> تازه‌سازی فهرست غایبان</a></div>{grade_html}</main>'''
+    return _school_page(content, page_title)
+
+
+@app.route('/school/absence-classification', methods=['POST'])
+def ario_school_absence_classification():
+    # Persist an excused/unexcused decision for a recorded absence.
+    login_redirect = _school_require_login()
+    if login_redirect:
+        return login_redirect
+    if not (_is_school_admin() or session.get('role') == 'معلم'):
+        abort(403)
+    if not _school_valid_csrf():
+        abort(400)
+
+    data, portal = _school_load()
+    class_id = request.form.get('class_id', '').strip()
+    student = request.form.get('student_username', '').strip()
+    date_raw = request.form.get('date', '').strip()
+    date_key = _ario_parse_school_date(date_raw, default=_school_now().strftime('%Y-%m-%d') if not date_raw else None)
+    classification = request.form.get('classification', '').strip()
+    if not date_key:
+        abort(400, description='تاریخ شمسی معتبر نیست. نمونه: ۱۴۰۵/۰۸/۳۰')
+    if classification not in SCHOOL_ABSENCE_CLASSIFICATIONS:
+        abort(400, description='نوع غیبت معتبر نیست.')
+    if class_id not in portal.get('classes', {}):
+        abort(404)
+    if not _school_can_write_class(data, portal, class_id):
+        abort(403)
+    account = data.get('users', {}).get(student, {})
+    if account.get('role') != 'دانش‌آموز' or account.get('school_class_id') != class_id:
+        abort(404)
+
+    item = portal.get('attendance', {}).get(date_key, {}).get(class_id, {}).get(student)
+    if not isinstance(item, dict) or item.get('status') not in ('غایب', 'موجه'):
+        abort(409, description='برای این دانش‌آموز در تاریخ انتخاب‌شده غیبت ثبت نشده است.')
+
+    now_label = _school_now().strftime('%Y-%m-%d %H:%M:%S')
+    item['absence_classification'] = classification
+    item['absence_classified_by'] = session.get('username', '')
+    item['absence_classified_at'] = now_label
+    item['absence_classification_source'] = 'teacher_or_admin'
+    save_data(data)
+    return redirect(url_for('ario_school_attendance_overview', date=date_key))
 
 
 @app.route('/school/attendance/<class_id>', methods=['GET', 'POST'])
@@ -7201,9 +8067,10 @@ def ario_school_attendance(class_id):
     data, portal = _school_load()
     cls = _school_require_class_access(data, portal, class_id, write=request.method == 'POST')
     token = _school_csrf()
-    date_key = request.values.get('date', _school_now().strftime('%Y-%m-%d'))
-    try: datetime.strptime(date_key, '%Y-%m-%d')
-    except ValueError: date_key = _school_now().strftime('%Y-%m-%d')
+    date_raw = request.values.get('date', '').strip()
+    date_key = _ario_parse_school_date(date_raw, default=_school_now().strftime('%Y-%m-%d') if not date_raw else None)
+    if not date_key:
+        abort(400, description='تاریخ شمسی معتبر نیست. نمونه: ۱۴۰۵/۰۸/۳۰')
     students = _school_class_students(data, class_id)
     if request.method == 'POST':
         if not _school_can_write_class(data, portal, class_id): abort(403)
@@ -7213,7 +8080,18 @@ def ario_school_attendance(class_id):
             status = request.form.get('status_' + student, 'حاضر')
             if status not in SCHOOL_ATTENDANCE_STATUSES: status = 'حاضر'
             note = request.form.get('note_' + student, '').strip()[:240]
-            day_record[student] = {'status': status, 'note': note, 'by': session.get('username'), 'source': 'teacher_or_admin', 'verified': True, 'updated_at': _school_now().strftime('%Y-%m-%d %H:%M:%S')}
+            previous = day_record.get(student, {}) if isinstance(day_record.get(student, {}), dict) else {}
+            updated_record = {'status': status, 'note': note, 'by': session.get('username'), 'source': 'teacher_or_admin', 'verified': True, 'updated_at': _school_now().strftime('%Y-%m-%d %H:%M:%S')}
+            if status in ('غایب', 'موجه'):
+                old_classification = previous.get('absence_classification')
+                if old_classification not in SCHOOL_ABSENCE_CLASSIFICATIONS:
+                    old_classification = 'موجه' if status == 'موجه' else 'در انتظار بررسی'
+                updated_record['absence_classification'] = ('موجه' if status == 'موجه' else old_classification)
+                if previous.get('absence_classified_by'):
+                    updated_record['absence_classified_by'] = previous.get('absence_classified_by')
+                    updated_record['absence_classified_at'] = previous.get('absence_classified_at', '')
+                    updated_record['absence_classification_source'] = previous.get('absence_classification_source', 'teacher_or_admin')
+            day_record[student] = updated_record
         save_data(data)
         return redirect(url_for('ario_school_attendance', class_id=class_id, date=date_key))
     record = portal.get('attendance', {}).get(date_key, {}).get(class_id, {})
@@ -7224,8 +8102,8 @@ def ario_school_attendance(class_id):
             if class_id in classes_data and session.get('username') in classes_data[class_id]:
                 item = classes_data[class_id][session.get('username')]
                 source_label = 'خوداظهاری · تأییدنشده' if item.get('source') == 'student_self_report' else 'ثبت دبیر/مدیر'
-                history.append(f'<tr><td>{_school_html(d)}</td><td>{_school_html(item.get("status","-"))}</td><td>{_school_html(source_label)}</td><td>{_school_html(item.get("submitted_at") or item.get("updated_at",""))}</td><td>{_school_html(item.get("note",""))}</td></tr>')
-        body = f'<section class="ario-school-panel"><h3>وضعیت حضور من در {_school_html(date_key)}</h3><p>{_school_html(own.get("status","برای این تاریخ هنوز ثبت نشده است."))}</p><p style="color:#9fb5cf">{"این وضعیت خوداظهاری است و ممکن است دبیر یا مدیر آن را بررسی یا اصلاح کند." if own.get("source")=="student_self_report" else "وضعیت ثبت‌شده در دفتر حضور و غیاب مدرسه."}</p></section><div class="ario-school-table-wrap"><table class="ario-school-table"><thead><tr><th>تاریخ</th><th>وضعیت</th><th>منبع ثبت</th><th>زمان ثبت</th><th>توضیح</th></tr></thead><tbody>{"".join(history) or "<tr><td colspan=5>هنوز سابقه‌ای ثبت نشده است.</td></tr>"}</tbody></table></div>'
+                history.append(f'<tr><td>{_school_html(_ario_shamsi_date(d))}</td><td>{_school_html(item.get("status","-"))}</td><td>{_school_html(source_label)}</td><td>{_school_html(_ario_shamsi_date(item.get("submitted_at") or item.get("updated_at","")))}</td><td>{_school_html(item.get("note",""))}</td></tr>')
+        body = f'<section class="ario-school-panel"><h3>وضعیت حضور من در {_school_html(_ario_shamsi_date(date_key))}</h3><p>{_school_html(own.get("status","برای این تاریخ هنوز ثبت نشده است."))}</p><p style="color:#9fb5cf">{"این وضعیت خوداظهاری است و ممکن است دبیر یا مدیر آن را بررسی یا اصلاح کند." if own.get("source")=="student_self_report" else "وضعیت ثبت‌شده در دفتر حضور و غیاب مدرسه."}</p></section><div class="ario-school-table-wrap"><table class="ario-school-table"><thead><tr><th>تاریخ</th><th>وضعیت</th><th>منبع ثبت</th><th>زمان ثبت</th><th>توضیح</th></tr></thead><tbody>{"".join(history) or "<tr><td colspan=5>هنوز سابقه‌ای ثبت نشده است.</td></tr>"}</tbody></table></div>'
     else:
         rows = []
         for i, student in enumerate(students, 1):
@@ -7233,8 +8111,8 @@ def ario_school_attendance(class_id):
             options = ''.join(f'<option value="{status}" {"selected" if saved.get("status", "حاضر")==status else ""}>{status}</option>' for status in SCHOOL_ATTENDANCE_STATUSES)
             source_label = 'خوداظهاری · تأییدنشده' if saved.get('source') == 'student_self_report' else ('ثبت دبیر/مدیر' if saved else 'ثبت نشده')
             saved_time = saved.get('submitted_at') or saved.get('updated_at', '—')
-            rows.append(f'<tr><td>{i}</td><td>{_school_html(student)}</td><td><select name="status_{_school_html(student)}">{options}</select></td><td>{_school_html(source_label)}</td><td>{_school_html(saved_time)}</td><td><input name="note_{_school_html(student)}" value="{_school_html(saved.get("note",""))}" placeholder="توضیح"></td></tr>')
-        body = f'''<form class="ario-school-panel" method="post"><input type="hidden" name="csrf_token" value="{_school_html(token)}"><label class="ario-school-field" style="max-width:220px">تاریخ حضور و غیاب<input type="date" name="date" value="{_school_html(date_key)}"></label><div class="ario-school-table-wrap" style="margin-top:15px"><table class="ario-school-table"><thead><tr><th>ردیف</th><th>دانش‌آموز</th><th>وضعیت</th><th>منبع ثبت</th><th>زمان</th><th>توضیح</th></tr></thead><tbody>{''.join(rows) or '<tr><td colspan="6">برای این کلاس دانش‌آموزی ثبت نشده است.</td></tr>'}</tbody></table></div><div class="ario-school-form-actions"><button class="ario-school-btn primary" type="submit">ذخیره حضور و غیاب</button></div></form>'''
+            rows.append(f'<tr><td>{i}</td><td>{_school_html(student)}</td><td><select name="status_{_school_html(student)}">{options}</select></td><td>{_school_html(source_label)}</td><td>{_school_html(_ario_shamsi_date(saved_time))}</td><td><input name="note_{_school_html(student)}" value="{_school_html(saved.get("note",""))}" placeholder="توضیح"></td></tr>')
+        body = f'''<form class="ario-school-panel" method="post"><input type="hidden" name="csrf_token" value="{_school_html(token)}"><label class="ario-school-field" style="max-width:220px">تاریخ حضور و غیاب<input type="text" name="date" inputmode="numeric" autocomplete="off" placeholder="۱۴۰۵/۰۸/۳۰" title="تاریخ شمسی؛ نمونه ۱۴۰۵/۰۸/۳۰" pattern="[0-9۰-۹٠-٩]{4}[/.-][0-9۰-۹٠-٩]{1,2}[/.-][0-9۰-۹٠-٩]{1,2}" value="{_school_html(_ario_shamsi_date(date_key))}"></label><div class="ario-school-table-wrap" style="margin-top:15px"><table class="ario-school-table"><thead><tr><th>ردیف</th><th>دانش‌آموز</th><th>وضعیت</th><th>منبع ثبت</th><th>زمان</th><th>توضیح</th></tr></thead><tbody>{''.join(rows) or '<tr><td colspan="6">برای این کلاس دانش‌آموزی ثبت نشده است.</td></tr>'}</tbody></table></div><div class="ario-school-form-actions"><button class="ario-school-btn primary" type="submit">ذخیره حضور و غیاب</button></div></form>'''
     content = f'<main class="ario-school-wrap"><a class="ario-school-back" href="/school/class/{class_id}">بازگشت به کلاس</a><section class="ario-school-hero"><span class="ario-school-eyebrow">ATTENDANCE REGISTER</span><h1>حضور و غیاب · {_school_html(_school_class_label(cls))}</h1><p>ثبت وضعیت حاضر، غایب، تأخیر و غیبت موجه برای هر دانش‌آموز.</p></section>{body}</main>'
     return _school_page(content, 'حضور و غیاب')
 
@@ -7252,9 +8130,9 @@ def ario_school_grades(class_id):
         if not _school_valid_csrf(): abort(400)
         subject = request.form.get('subject', '').strip()[:80]
         title = request.form.get('title', '').strip()[:100]
-        date_value = request.form.get('date', datetime.now().strftime('%Y-%m-%d'))
-        try: datetime.strptime(date_value, '%Y-%m-%d')
-        except ValueError: date_value = datetime.now().strftime('%Y-%m-%d')
+        date_raw = request.form.get('date', '').strip()
+        date_value = _ario_parse_school_date(date_raw, default=_school_now().strftime('%Y-%m-%d') if not date_raw else None)
+        if not date_value: abort(400, description='تاریخ شمسی نمره معتبر نیست. نمونه: ۱۴۰۵/۰۸/۳۰')
         scores = {}
         for student in students:
             raw = request.form.get('score_' + student, '').strip()
@@ -7263,25 +8141,25 @@ def ario_school_grades(class_id):
             except ValueError: continue
             if 0 <= score <= 20: scores[student] = score
         if subject and title and scores:
-            portal.setdefault('grades', []).append({'id': secrets.token_urlsafe(9), 'class_id': class_id, 'subject': subject, 'title': title, 'date': date_value, 'scores': scores, 'created_by': session.get('username'), 'created_at': datetime.now().strftime('%Y-%m-%d %H:%M')})
+            portal.setdefault('grades', []).append({'id': secrets.token_urlsafe(9), 'class_id': class_id, 'subject': subject, 'title': title, 'date': date_value, 'scores': scores, 'created_by': session.get('username'), 'created_at': _school_now().strftime('%Y-%m-%d %H:%M')})
             save_data(data)
         return redirect(url_for('ario_school_grades', class_id=class_id))
     grade_records = [item for item in portal.get('grades', []) if item.get('class_id') == class_id]
-    grade_records.sort(key=lambda x: x.get('date', ''), reverse=True)
+    grade_records.sort(key=lambda x: _ario_parse_school_date(x.get('date', ''), default='0000-00-00'), reverse=True)
     if session.get('role') == 'دانش‌آموز':
         username = session.get('username')
         rows = []
         for item in grade_records:
             if username in item.get('scores', {}):
-                rows.append(f'<tr><td>{_school_html(item.get("date",""))}</td><td>{_school_html(item.get("subject",""))}</td><td>{_school_html(item.get("title",""))}</td><td>{_school_html(item.get("scores",{}).get(username,""))} از ۲۰</td></tr>')
+                rows.append(f'<tr><td>{_school_html(_ario_shamsi_date(item.get("date","")))}</td><td>{_school_html(item.get("subject",""))}</td><td>{_school_html(item.get("title",""))}</td><td>{_school_html(item.get("scores",{}).get(username,""))} از ۲۰</td></tr>')
         body = '<div class="ario-school-table-wrap"><table class="ario-school-table"><thead><tr><th>تاریخ</th><th>درس</th><th>عنوان ارزیابی</th><th>نمره</th></tr></thead><tbody>' + (''.join(rows) or '<tr><td colspan="4">هنوز نمره‌ای ثبت نشده است.</td></tr>') + '</tbody></table></div>'
     else:
         entry_rows = []
         for item in grade_records:
             for student, score in item.get('scores', {}).items():
-                entry_rows.append(f'<tr><td>{_school_html(item.get("date",""))}</td><td>{_school_html(item.get("subject",""))}</td><td>{_school_html(item.get("title",""))}</td><td>{_school_html(student)}</td><td>{_school_html(score)}</td></tr>')
+                entry_rows.append(f'<tr><td>{_school_html(_ario_shamsi_date(item.get("date","")))}</td><td>{_school_html(item.get("subject",""))}</td><td>{_school_html(item.get("title",""))}</td><td>{_school_html(student)}</td><td>{_school_html(score)}</td></tr>')
         form_rows = ''.join(f'<tr><td>{i}</td><td>{_school_html(student)}</td><td><input type="number" name="score_{_school_html(student)}" min="0" max="20" step="0.25" placeholder="از ۲۰"></td></tr>' for i, student in enumerate(students, 1))
-        form_html = f'''<form method="post" class="ario-school-panel"><input type="hidden" name="csrf_token" value="{_school_html(token)}"><h3>ثبت نمره جدید</h3><div class="ario-school-form-grid"><label class="ario-school-field">نام درس<input name="subject" required maxlength="80"></label><label class="ario-school-field">عنوان آزمون یا ارزیابی<input name="title" required maxlength="100"></label><label class="ario-school-field">تاریخ<input type="date" name="date" value="{datetime.now().strftime('%Y-%m-%d')}"></label></div><div class="ario-school-table-wrap" style="margin-top:14px"><table class="ario-school-table"><thead><tr><th>ردیف</th><th>دانش‌آموز</th><th>نمره از ۲۰</th></tr></thead><tbody>{form_rows or '<tr><td colspan="3">ابتدا دانش‌آموزان را در کلاس ثبت کنید.</td></tr>'}</tbody></table></div><div class="ario-school-form-actions"><button class="ario-school-btn primary" type="submit">ذخیره نمره‌ها</button></div></form>'''
+        form_html = f'''<form method="post" class="ario-school-panel"><input type="hidden" name="csrf_token" value="{_school_html(token)}"><h3>ثبت نمره جدید</h3><div class="ario-school-form-grid"><label class="ario-school-field">نام درس<input name="subject" required maxlength="80"></label><label class="ario-school-field">عنوان آزمون یا ارزیابی<input name="title" required maxlength="100"></label><label class="ario-school-field">تاریخ<input type="text" name="date" inputmode="numeric" autocomplete="off" placeholder="۱۴۰۵/۰۸/۳۰" title="تاریخ شمسی؛ نمونه ۱۴۰۵/۰۸/۳۰" value="{_school_html(_ario_shamsi_date(_school_now().strftime('%Y-%m-%d')))}"></label></div><div class="ario-school-table-wrap" style="margin-top:14px"><table class="ario-school-table"><thead><tr><th>ردیف</th><th>دانش‌آموز</th><th>نمره از ۲۰</th></tr></thead><tbody>{form_rows or '<tr><td colspan="3">ابتدا دانش‌آموزان را در کلاس ثبت کنید.</td></tr>'}</tbody></table></div><div class="ario-school-form-actions"><button class="ario-school-btn primary" type="submit">ذخیره نمره‌ها</button></div></form>'''
         body = form_html + '<section class="ario-school-panel"><h3>سوابق نمره‌های ثبت‌شده</h3><div class="ario-school-table-wrap"><table class="ario-school-table"><thead><tr><th>تاریخ</th><th>درس</th><th>ارزیابی</th><th>دانش‌آموز</th><th>نمره</th></tr></thead><tbody>' + (''.join(entry_rows) or '<tr><td colspan="5">هنوز نمره‌ای ثبت نشده است.</td></tr>') + '</tbody></table></div></section>'
     content = f'<main class="ario-school-wrap"><a class="ario-school-back" href="/school/class/{class_id}">بازگشت به کلاس</a><section class="ario-school-hero"><span class="ario-school-eyebrow">ACADEMIC RECORDS</span><h1>دفتر نمره · {_school_html(_school_class_label(cls))}</h1><p>ثبت نمره از صفر تا ۲۰؛ هر ارزیابی به‌صورت جداگانه ذخیره می‌شود.</p></section>{body}</main>'
     return _school_page(content, 'دفتر نمره')
@@ -7306,19 +8184,19 @@ def ario_school_homework(class_id):
             text = request.form.get('submission', '').strip()[:5000]
             item = next((h for h in portal.get('homework', []) if h.get('id') == homework_id and h.get('class_id') == class_id), None)
             if not item or not text: abort(400)
-            item.setdefault('submissions', {})[username] = {'text': text, 'submitted_at': datetime.now().strftime('%Y-%m-%d %H:%M')}
+            item.setdefault('submissions', {})[username] = {'text': text, 'submitted_at': _school_now().strftime('%Y-%m-%d %H:%M')}
             save_data(data)
             return redirect(url_for('ario_school_homework', class_id=class_id))
         if not _school_can_write_class(data, portal, class_id): abort(403)
         subject = request.form.get('subject', '').strip()[:80]
         title = request.form.get('title', '').strip()[:120]
         description = request.form.get('description', '').strip()[:4000]
-        due_date = request.form.get('due_date', '').strip()
+        due_date_raw = request.form.get('due_date', '').strip()
+        due_date = _ario_parse_school_date(due_date_raw, default='') if due_date_raw else ''
+        if due_date_raw and not due_date:
+            abort(400, description='مهلت تکلیف را به شمسی وارد کنید. نمونه: ۱۴۰۵/۰۸/۳۰')
         if subject and title and description:
-            if due_date:
-                try: datetime.strptime(due_date, '%Y-%m-%d')
-                except ValueError: due_date = ''
-            portal.setdefault('homework', []).append({'id': secrets.token_urlsafe(9), 'class_id': class_id, 'subject': subject, 'title': title, 'description': description, 'due_date': due_date, 'created_by': username, 'created_at': datetime.now().strftime('%Y-%m-%d %H:%M'), 'submissions': {}})
+            portal.setdefault('homework', []).append({'id': secrets.token_urlsafe(9), 'class_id': class_id, 'subject': subject, 'title': title, 'description': description, 'due_date': due_date, 'created_by': username, 'created_at': _school_now().strftime('%Y-%m-%d %H:%M'), 'submissions': {}})
             save_data(data)
         return redirect(url_for('ario_school_homework', class_id=class_id))
     items = [item for item in portal.get('homework', []) if item.get('class_id') == class_id]
@@ -7328,16 +8206,16 @@ def ario_school_homework(class_id):
         submissions = item.get('submissions', {})
         if role == 'دانش‌آموز':
             own = submissions.get(username, {})
-            submission_box = f'''<form method="post" class="ario-school-panel"><input type="hidden" name="csrf_token" value="{_school_html(token)}"><input type="hidden" name="action" value="submit"><input type="hidden" name="homework_id" value="{_school_html(item.get('id',''))}"><label class="ario-school-field">پاسخ یا متن انجام تکلیف<textarea name="submission" required maxlength="5000" placeholder="پاسخ خود را بنویسید...">{_school_html(own.get('text',''))}</textarea></label><div class="ario-school-form-actions"><button class="ario-school-btn primary" type="submit">{'به‌روزرسانی پاسخ' if own else 'ارسال پاسخ'}</button><span class="ario-school-chip">{_school_html(own.get('submitted_at','ارسال نشده'))}</span></div></form>'''
+            submission_box = f'''<form method="post" class="ario-school-panel"><input type="hidden" name="csrf_token" value="{_school_html(token)}"><input type="hidden" name="action" value="submit"><input type="hidden" name="homework_id" value="{_school_html(item.get('id',''))}"><label class="ario-school-field">پاسخ یا متن انجام تکلیف<textarea name="submission" required maxlength="5000" placeholder="پاسخ خود را بنویسید...">{_school_html(own.get('text',''))}</textarea></label><div class="ario-school-form-actions"><button class="ario-school-btn primary" type="submit">{'به‌روزرسانی پاسخ' if own else 'ارسال پاسخ'}</button><span class="ario-school-chip">{_school_html(_ario_shamsi_date(own.get('submitted_at','ارسال نشده')))}</span></div></form>'''
         else:
             submission_box = f'<p style="color:#9fc4dc;margin-top:12px">{len(submissions)} پاسخ از {len(students)} دانش‌آموز</p>'
             if _school_can_write_class(data, portal, class_id):
                 for student, answer in submissions.items():
-                    submission_box += f'<details style="margin-top:8px"><summary>{_school_html(student)}</summary><p style="white-space:pre-wrap;color:#c6d8eb;line-height:2">{_school_html(answer.get("text",""))}</p><small style="color:#91b0d0">{_school_html(answer.get("submitted_at",""))}</small></details>'
-        cards.append(f'<article class="ario-school-panel"><span class="ario-school-chip">{_school_html(item.get("subject",""))} · مهلت: {_school_html(item.get("due_date") or "تعیین نشده")}</span><h3 style="margin-top:10px">{_school_html(item.get("title",""))}</h3><p style="white-space:pre-wrap;color:#bfd0e3;line-height:2">{_school_html(item.get("description",""))}</p><small style="color:#91b0d0">ثبت‌شده توسط {_school_html(item.get("created_by",""))} · {_school_html(item.get("created_at",""))}</small>{submission_box}</article>')
+                    submission_box += f'<details style="margin-top:8px"><summary>{_school_html(student)}</summary><p style="white-space:pre-wrap;color:#c6d8eb;line-height:2">{_school_html(answer.get("text",""))}</p><small style="color:#91b0d0">{_school_html(_ario_shamsi_date(answer.get("submitted_at","")))}</small></details>'
+        cards.append(f'<article class="ario-school-panel"><span class="ario-school-chip">{_school_html(item.get("subject",""))} · مهلت: {_school_html(_ario_shamsi_date(item.get("due_date")) if item.get("due_date") else "تعیین نشده")}</span><h3 style="margin-top:10px">{_school_html(item.get("title",""))}</h3><p style="white-space:pre-wrap;color:#bfd0e3;line-height:2">{_school_html(item.get("description",""))}</p><small style="color:#91b0d0">ثبت‌شده توسط {_school_html(item.get("created_by",""))} · {_school_html(_ario_shamsi_date(item.get("created_at","")))}</small>{submission_box}</article>')
     create_form = ''
     if _school_can_write_class(data, portal, class_id):
-        create_form = f'''<form class="ario-school-panel" method="post"><input type="hidden" name="csrf_token" value="{_school_html(token)}"><input type="hidden" name="action" value="create"><h3>تعریف تکلیف جدید</h3><div class="ario-school-form-grid"><label class="ario-school-field">نام درس<input name="subject" required></label><label class="ario-school-field">عنوان تکلیف<input name="title" required></label><label class="ario-school-field">مهلت تحویل<input type="date" name="due_date"></label><label class="ario-school-field" style="grid-column:1/-1">توضیحات و دستور تکلیف<textarea name="description" required></textarea></label></div><div class="ario-school-form-actions"><button class="ario-school-btn primary" type="submit">انتشار تکلیف</button></div></form>'''
+        create_form = f'''<form class="ario-school-panel" method="post"><input type="hidden" name="csrf_token" value="{_school_html(token)}"><input type="hidden" name="action" value="create"><h3>تعریف تکلیف جدید</h3><div class="ario-school-form-grid"><label class="ario-school-field">نام درس<input name="subject" required></label><label class="ario-school-field">عنوان تکلیف<input name="title" required></label><label class="ario-school-field">مهلت تحویل<input type="text" name="due_date" inputmode="numeric" autocomplete="off" placeholder="۱۴۰۵/۰۸/۳۰"></label><label class="ario-school-field" style="grid-column:1/-1">توضیحات و دستور تکلیف<textarea name="description" required></textarea></label></div><div class="ario-school-form-actions"><button class="ario-school-btn primary" type="submit">انتشار تکلیف</button></div></form>'''
     content = f'<main class="ario-school-wrap"><a class="ario-school-back" href="/school/class/{class_id}">بازگشت به کلاس</a><section class="ario-school-hero"><span class="ario-school-eyebrow">HOMEWORK & ASSIGNMENTS</span><h1>تکالیف · {_school_html(_school_class_label(cls))}</h1><p>دبیر می‌تواند تکلیف تعریف کند و دانش‌آموز پاسخ خود را از همین صفحه بفرستد.</p></section>{create_form}{"".join(cards) or "<div class=ario-school-empty>هنوز تکلیفی برای این کلاس ثبت نشده است.</div>"}</main>'
     return _school_page(content, 'تکالیف')
 
@@ -7394,6 +8272,8 @@ def ario_school_announcements():
     if request.method == 'POST':
         if not _school_valid_csrf(): abort(400)
         if not (_is_school_admin() or role == 'معلم'): abort(403)
+        teacher_account = data.get('users', {}).get(username, {})
+        if role == 'معلم' and not _school_class_access_approved(teacher_account): abort(403)
         title = request.form.get('title', '').strip()[:120]
         text_body = request.form.get('text', '').strip()[:4000]
         target = request.form.get('target_class', 'all')
@@ -7401,26 +8281,31 @@ def ario_school_announcements():
         if target != 'all' and target not in portal.get('classes', {}): abort(400)
         if title and text_body:
             target_label = 'همه مدرسه' if target == 'all' else _school_class_label(portal['classes'][target])
-            portal.setdefault('announcements', []).append({'id': secrets.token_urlsafe(8), 'title': title, 'text': text_body, 'target_class': target, 'target_label': target_label, 'created_by': username, 'created_at': datetime.now().strftime('%Y-%m-%d %H:%M')})
+            portal.setdefault('announcements', []).append({'id': secrets.token_urlsafe(8), 'title': title, 'text': text_body, 'target_class': target, 'target_label': target_label, 'created_by': username, 'created_at': _school_now().strftime('%Y-%m-%d %H:%M')})
             save_data(data)
         return redirect(url_for('ario_school_announcements'))
     if _is_school_admin():
         visible = list(reversed(portal.get('announcements', [])))
         targets = [('all', 'همه مدرسه')] + [(cid, _school_class_label(cls)) for cid, cls in portal.get('classes', {}).items()]
     elif role == 'معلم':
-        allowed = set(_school_teacher_classes(portal, username))
+        teacher_account = data.get('users', {}).get(username, {})
+        allowed = set(_school_teacher_classes(portal, username)) if _school_class_access_approved(teacher_account) else set()
         visible = [x for x in reversed(portal.get('announcements', [])) if x.get('target_class') == 'all' or x.get('target_class') in allowed]
         targets = [(cid, _school_class_label(portal['classes'][cid])) for cid in allowed]
     else:
-        my_class = data.get('users', {}).get(username, {}).get('school_class_id')
-        visible = [x for x in reversed(portal.get('announcements', [])) if x.get('target_class') == 'all' or x.get('target_class') == my_class]
+        student_account = data.get('users', {}).get(username, {})
+        my_class = (student_account.get('school_class_id')
+                    if role == 'دانش‌آموز' and _school_class_access_approved(student_account) else None)
+        visible = [x for x in reversed(portal.get('announcements', []))
+                   if x.get('target_class') == 'all' or (my_class and x.get('target_class') == my_class)]
         targets = []
     create_form = ''
-    if _is_school_admin() or role == 'معلم':
+    teacher_can_publish = role == 'معلم' and _school_class_access_approved(data.get('users', {}).get(username, {}))
+    if _is_school_admin() or teacher_can_publish:
         target_opts = ''.join(f'<option value="{_school_html(cid)}">{_school_html(label)}</option>' for cid, label in targets)
         if not target_opts: target_opts = '<option value="">کلاسی در دسترس نیست</option>'
         create_form = f'''<form method="post" class="ario-school-panel"><input type="hidden" name="csrf_token" value="{_school_html(token)}"><h3>انتشار اطلاعیه جدید</h3><div class="ario-school-form-grid"><label class="ario-school-field">عنوان<input name="title" required maxlength="120"></label><label class="ario-school-field">مخاطبان<select name="target_class">{target_opts}</select></label><label class="ario-school-field" style="grid-column:1/-1">متن اطلاعیه<textarea name="text" required maxlength="4000"></textarea></label></div><div class="ario-school-form-actions"><button class="ario-school-btn primary" type="submit">انتشار اطلاعیه</button></div></form>'''
-    cards = ''.join(f'<article class="ario-school-panel"><span class="ario-school-chip">{_school_html(item.get("target_label","همه مدرسه"))}</span><h3 style="margin-top:10px">{_school_html(item.get("title",""))}</h3><p style="white-space:pre-wrap;color:#bfd0e3;line-height:2">{_school_html(item.get("text",""))}</p><small style="color:#91b0d0">{_school_html(item.get("created_by",""))} · {_school_html(item.get("created_at",""))}</small></article>' for item in visible)
+    cards = ''.join(f'<article class="ario-school-panel"><span class="ario-school-chip">{_school_html(item.get("target_label","همه مدرسه"))}</span><h3 style="margin-top:10px">{_school_html(item.get("title",""))}</h3><p style="white-space:pre-wrap;color:#bfd0e3;line-height:2">{_school_html(item.get("text",""))}</p><small style="color:#91b0d0">{_school_html(item.get("created_by",""))} · {_school_html(_ario_shamsi_date(item.get("created_at","")))}</small></article>' for item in visible)
     content = f'<main class="ario-school-wrap"><a class="ario-school-back" href="/school">بازگشت به مدرسه‌یار</a><section class="ario-school-hero"><span class="ario-school-eyebrow">SCHOOL BULLETIN</span><h1>تابلوی اطلاعیه‌ها</h1><p>پیام‌های مدرسه و کلاس‌ها در یک مکان مشخص.</p></section>{create_form}{cards or "<div class=ario-school-empty>اطلاعیه‌ای برای نمایش وجود ندارد.</div>"}</main>'
     return _school_page(content, 'اطلاعیه‌ها')
 
@@ -7458,13 +8343,13 @@ def ario_school_enrollment_requests():
         label = _school_class_label(cls) if cls else ('پس از تأیید توسط مدیر اختصاص داده می‌شود' if role == 'معلم' else 'کلاس نامعتبر')
         rid = _school_html(req.get('id', ''))
         username = _school_html(req.get('username', ''))
-        actions = f'''<form method="post" action="/school/request/{rid}/approve" style="display:inline"><input type="hidden" name="csrf_token" value="{_school_html(token)}"><button class="ario-school-btn primary" type="submit">تأیید و ساخت حساب</button></form> <form method="post" action="/school/request/{rid}/reject" style="display:inline"><input type="hidden" name="csrf_token" value="{_school_html(token)}"><button class="ario-school-btn danger" type="submit">رد درخواست</button></form>'''
-        rows.append(f'<tr><td>{_school_html(req.get("full_name", "-"))}</td><td>{username}</td><td>{_school_html(role)}</td><td>{_school_html(label)}</td><td>{_school_html(req.get("request_message", "-") or "-")}</td><td>{_school_html(req.get("requested_at", ""))}</td><td>{actions}</td></tr>')
+        actions = f'''<form method="post" action="/school/request/{rid}/approve" style="display:inline"><input type="hidden" name="csrf_token" value="{_school_html(token)}"><button class="ario-school-btn primary" type="submit">تأیید و فعال‌سازی دسترسی</button></form> <form method="post" action="/school/request/{rid}/reject" style="display:inline"><input type="hidden" name="csrf_token" value="{_school_html(token)}"><button class="ario-school-btn danger" type="submit">رد درخواست</button></form>'''
+        rows.append(f'<tr><td>{_school_html(req.get("full_name", "-"))}</td><td>{username}</td><td>{_school_html(role)}</td><td>{_school_html(label)}</td><td>{_school_html(req.get("request_message", "-") or "-")}</td><td>{_school_html(_ario_shamsi_date(req.get("requested_at", "")))}</td><td>{actions}</td></tr>')
     history_rows = ''.join(
-        f'<tr><td>{_school_html(r.get("username", ""))}</td><td>{_school_html(r.get("role", "دانش‌آموز"))}</td><td>{_school_html(_school_class_label(portal.get("classes", {}).get(r.get("class_id"), {})) if r.get("class_id") in portal.get("classes", {}) else ("تعیین نشده" if r.get("role") == "معلم" else "-"))}</td><td>{"تأیید شد" if r.get("status")=="approved" else ("رد شد" if r.get("status")=="rejected" else "نیازمند بررسی")}</td><td>{_school_html(r.get("decided_at", ""))}</td></tr>'
+        f'<tr><td>{_school_html(r.get("username", ""))}</td><td>{_school_html(r.get("role", "دانش‌آموز"))}</td><td>{_school_html(_school_class_label(portal.get("classes", {}).get(r.get("class_id"), {})) if r.get("class_id") in portal.get("classes", {}) else ("تعیین نشده" if r.get("role") == "معلم" else "-"))}</td><td>{"تأیید شد" if r.get("status")=="approved" else ("رد شد" if r.get("status")=="rejected" else "نیازمند بررسی")}</td><td>{_school_html(_ario_shamsi_date(r.get("decided_at", "")))}</td></tr>'
         for r in history
     )
-    content = f'''<main class="ario-school-wrap"><a class="ario-school-back" href="/school">بازگشت به مدرسه‌یار</a><section class="ario-school-hero"><span class="ario-school-eyebrow">STUDENT & TEACHER ENTRY APPROVAL</span><h1>درخواست‌های ساخت حساب</h1><p>درخواست‌های دانش‌آموزان و دبیران در این بخش بررسی می‌شوند. حساب فقط پس از تأیید مدیر ساخته و به دستگاه درخواست‌دهنده متصل می‌شود.</p><div class="ario-school-actions"><span class="ario-school-chip">{len(pending)} درخواست در انتظار</span></div></section><section class="ario-school-panel"><h3>درخواست‌های بررسی‌نشده</h3><div class="ario-school-table-wrap"><table class="ario-school-table"><thead><tr><th>نام کامل</th><th>نام کاربری</th><th>نقش درخواستی</th><th>کلاس / تخصیص</th><th>پیام به مدیر</th><th>زمان درخواست</th><th>تصمیم مدیر</th></tr></thead><tbody>{''.join(rows) or '<tr><td colspan="7">درخواست در انتظار وجود ندارد.</td></tr>'}</tbody></table></div><p style="color:#9fb5cf;line-height:2;font-size:.78rem;margin-top:12px">رمز عبور فقط به‌صورت هش امن نگهداری می‌شود. دانش‌آموز پس از تأیید عضو کلاس انتخابی می‌شود؛ دبیر پس از تأیید ساخته می‌شود و مدیر می‌تواند کلاس‌های تدریس او را جداگانه اختصاص دهد.</p></section><section class="ario-school-panel"><h3>آخرین تصمیم‌ها</h3><div class="ario-school-table-wrap"><table class="ario-school-table"><thead><tr><th>نام کاربری</th><th>نقش</th><th>کلاس</th><th>وضعیت</th><th>زمان تصمیم</th></tr></thead><tbody>{history_rows or '<tr><td colspan="5">هنوز تصمیمی ثبت نشده است.</td></tr>'}</tbody></table></div></section></main>'''
+    content = f'''<main class="ario-school-wrap"><a class="ario-school-back" href="/school">بازگشت به مدرسه‌یار</a><section class="ario-school-hero"><span class="ario-school-eyebrow">STUDENT & TEACHER ENTRY APPROVAL</span><h1>درخواست‌های ساخت حساب</h1><p>درخواست‌های دانش‌آموزان و دبیران در این بخش بررسی می‌شوند. حساب از ابتدا برای ورود به بخش‌های عمومی سایت فعال است؛ با تأیید مدیر، دسترسی آموزشی و کلاس فعال می‌شود.</p><div class="ario-school-actions"><span class="ario-school-chip">{len(pending)} درخواست در انتظار</span></div></section><section class="ario-school-panel"><h3>درخواست‌های بررسی‌نشده</h3><div class="ario-school-table-wrap"><table class="ario-school-table"><thead><tr><th>نام کامل</th><th>نام کاربری</th><th>نقش درخواستی</th><th>کلاس / تخصیص</th><th>پیام به مدیر</th><th>زمان درخواست</th><th>تصمیم مدیر</th></tr></thead><tbody>{''.join(rows) or '<tr><td colspan="7">درخواست در انتظار وجود ندارد.</td></tr>'}</tbody></table></div><p style="color:#9fb5cf;line-height:2;font-size:.78rem;margin-top:12px">حساب دانش‌آموز یا دبیر از زمان درخواست برای بخش‌های عمومی سایت قابل استفاده است. پس از تأیید، دانش‌آموز به کلاس انتخابی متصل می‌شود؛ دسترسی دبیر نیز فعال می‌شود و مدیر می‌تواند کلاس‌های تدریس او را اختصاص دهد. رمز عبور فقط به‌صورت هش امن نگهداری می‌شود.</p></section><section class="ario-school-panel"><h3>آخرین تصمیم‌ها</h3><div class="ario-school-table-wrap"><table class="ario-school-table"><thead><tr><th>نام کاربری</th><th>نقش</th><th>کلاس</th><th>وضعیت</th><th>زمان تصمیم</th></tr></thead><tbody>{history_rows or '<tr><td colspan="5">هنوز تصمیمی ثبت نشده است.</td></tr>'}</tbody></table></div></section></main>'''
     return _school_page(content, 'درخواست‌های ساخت حساب')
 
 
@@ -7476,35 +8361,67 @@ def ario_school_decide_enrollment(request_id, decision):
     data, portal = _school_load()
     req = next((r for r in portal.get('enrollment_requests', []) if r.get('id') == request_id and r.get('status') == 'pending'), None)
     if not req: return redirect(url_for('ario_school_enrollment_requests'))
+
     username = str(req.get('username', '')).strip()
     requested_role = req.get('role', 'دانش‌آموز')
     class_id = req.get('class_id')
     device_key = req.get('device_key', '')
+    users = data.setdefault('users', {})
+    account = users.get(username)
+    precreated = bool(req.get('account_precreated')) and isinstance(account, dict) and account.get('role') == requested_role
+
     if decision == 'approve':
         valid_class = class_id in portal.get('classes', {}) if requested_role == 'دانش‌آموز' else True
-        if (requested_role not in ('دانش‌آموز', 'معلم') or username in data.get('users', {}) or not valid_class or not req.get('password_hash')):
+        if requested_role not in ('دانش‌آموز', 'معلم') or not valid_class:
             req['status'] = 'conflict'
-            req['decision_note'] = 'نام کاربری تکراری، نقش یا کلاس نامعتبر یا اطلاعات ناقص'
-            req.pop('password_hash', None)
-        else:
-            new_account = {
-                'password': req.get('password_hash'), 'role': requested_role,
-                'approved_by': session.get('username'),
-                'approved_at': datetime.now().strftime('%Y-%m-%d %H:%M'),
-                'full_name': req.get('full_name', '')
-            }
+            req['decision_note'] = 'نقش یا کلاس نامعتبر است.'
+        elif precreated:
+            account['class_access_approved'] = True
+            account['class_access_status'] = 'approved'
+            account['approved_by'] = session.get('username')
+            account['approved_at'] = _school_now().strftime('%Y-%m-%d %H:%M')
+            account.setdefault('full_name', req.get('full_name', ''))
             if requested_role == 'دانش‌آموز':
-                new_account['school_class_id'] = class_id
-            data.setdefault('users', {})[username] = new_account
+                account['school_class_id'] = class_id
+                account.pop('requested_class_id', None)
+            else:
+                # The teacher's account is approved now; class assignments remain
+                # a separate manager action and are required for class access.
+                account.pop('school_class_id', None)
             if device_key and _ario_bind_device_account(portal, username, device_key):
                 req['linked_device'] = True
             req['status'] = 'approved'
-            req.pop('password_hash', None)
+        elif username not in users and req.get('password_hash'):
+            # Backward compatibility for legacy requests made before accounts were
+            # provisioned at sign-up.
+            new_account = {
+                'password': req.get('password_hash'), 'role': requested_role,
+                'approved_by': session.get('username'),
+                'approved_at': _school_now().strftime('%Y-%m-%d %H:%M'),
+                'full_name': req.get('full_name', ''),
+                'class_access_approved': True,
+                'class_access_status': 'approved',
+            }
+            if requested_role == 'دانش‌آموز':
+                new_account['school_class_id'] = class_id
+            users[username] = new_account
+            if device_key and _ario_bind_device_account(portal, username, device_key):
+                req['linked_device'] = True
+            req['status'] = 'approved'
+        else:
+            req['status'] = 'conflict'
+            req['decision_note'] = 'حساب از قبل وجود دارد اما با درخواست در انتظار تطابق ندارد.'
+        req.pop('password_hash', None)
     else:
         req['status'] = 'rejected'
+        if precreated:
+            account['class_access_approved'] = False
+            account['class_access_status'] = 'rejected'
+            account.pop('school_class_id', None)
         req.pop('password_hash', None)
+
     req['decided_by'] = session.get('username')
-    req['decided_at'] = datetime.now().strftime('%Y-%m-%d %H:%M')
+    req['decided_at'] = _school_now().strftime('%Y-%m-%d %H:%M')
     save_data(data)
     return redirect(url_for('ario_school_enrollment_requests'))
 
@@ -7535,8 +8452,9 @@ def ario_school_exams():
     username = session.get('username', '')
     role = session.get('role', '')
     is_admin = _is_school_admin()
-    my_class = data.get('users', {}).get(username, {}).get('school_class_id') if role == 'دانش‌آموز' else None
-    teacher_classes = set(_school_teacher_classes(portal, username)) if role == 'معلم' else set()
+    current_account = data.get('users', {}).get(username, {})
+    my_class = current_account.get('school_class_id') if role == 'دانش‌آموز' and _school_class_access_approved(current_account) else None
+    teacher_classes = set(_school_teacher_classes(portal, username)) if role == 'معلم' and _school_class_access_approved(current_account) else set()
     if not (is_admin or role in ('معلم', 'دانش‌آموز')): abort(403)
     token = _school_csrf()
 
@@ -7569,7 +8487,7 @@ def ario_school_exams():
         exam = {
             'id': secrets.token_urlsafe(10), 'class_id': class_id, 'title': title, 'subject': subject,
             'questions': questions, 'published': True, 'created_by': username,
-            'created_at': datetime.now().strftime('%Y-%m-%d %H:%M')
+            'created_at': _school_now().strftime('%Y-%m-%d %H:%M')
         }
         portal.setdefault('exams', []).append(exam)
         save_data(data)
@@ -7580,7 +8498,9 @@ def ario_school_exams():
     elif role == 'معلم':
         visible_exams = [e for e in reversed(portal.get('exams', [])) if e.get('class_id') in teacher_classes]
     else:
-        visible_exams = [e for e in reversed(portal.get('exams', [])) if e.get('class_id') == my_class and e.get('published', True)]
+        visible_exams = ([e for e in reversed(portal.get('exams', []))
+                          if e.get('class_id') == my_class and e.get('published', True)]
+                         if my_class and _school_class_access_approved(current_account) else [])
 
     create_form = ''
     if is_admin:
@@ -7599,7 +8519,7 @@ def ario_school_exams():
             action_html = f'<a class="ario-school-btn" href="/school/exam-results/{_school_html(exam.get("id", ""))}">مشاهده نتایج · {attempt_count} شرکت‌کننده</a>'
         else:
             action_html = f'<span class="ario-school-chip">{attempt_count} پاسخ ثبت‌شده</span>'
-        exam_cards.append(f'<article class="ario-school-panel"><span class="ario-school-chip">{_school_html(label)} · {_school_html(exam.get("subject", ""))}</span><h3 style="margin-top:10px">{_school_html(exam.get("title", "امتحان"))}</h3><p style="color:#a9bfd8;line-height:2">{len(exam.get("questions", []))} سؤال چهارگزینه‌ای · منتشرشده توسط {_school_html(exam.get("created_by", ""))} · {_school_html(exam.get("created_at", ""))}</p><div class="ario-school-actions">{action_html}</div></article>')
+        exam_cards.append(f'<article class="ario-school-panel"><span class="ario-school-chip">{_school_html(label)} · {_school_html(exam.get("subject", ""))}</span><h3 style="margin-top:10px">{_school_html(exam.get("title", "امتحان"))}</h3><p style="color:#a9bfd8;line-height:2">{len(exam.get("questions", []))} سؤال چهارگزینه‌ای · منتشرشده توسط {_school_html(exam.get("created_by", ""))} · {_school_html(_ario_shamsi_date(exam.get("created_at", "")))}</p><div class="ario-school-actions">{action_html}</div></article>')
 
     success = '<div class="ario-school-notice">امتحان با موفقیت ساخته شد و برای کلاس انتخاب‌شده قابل مشاهده است.</div>' if request.args.get('created') == '1' else ''
     intro = 'در این بخش می‌توانی امتحان‌های فعال کلاس خودت را ببینی و هر آزمون را فقط یک بار ارسال کنی.' if role == 'دانش‌آموز' else ('آزمون‌های کلاس‌های اختصاص‌یافته به شما.' if role == 'معلم' else 'امتحان را بساز، کلاس مقصد را انتخاب کن و نتایج دانش‌آموزان را ببین.')
@@ -7620,12 +8540,13 @@ def ario_school_take_exam(exam_id):
     exam = next((e for e in portal.get('exams', []) if e.get('id') == exam_id and e.get('published', True)), None)
     if not exam: abort(404)
     account = data.get('users', {}).get(username, {})
+    if not _school_class_access_approved(account): abort(403)
     if account.get('school_class_id') != exam.get('class_id'): abort(403)
     questions = exam.get('questions', [])
     attempts = portal.setdefault('exam_attempts', [])
     existing = next((a for a in attempts if a.get('exam_id') == exam_id and a.get('student') == username), None)
     if existing:
-        content = f'''<main class="ario-school-wrap"><a class="ario-school-back" href="/school/exams">بازگشت به امتحان‌ها</a><section class="ario-school-hero"><span class="ario-school-eyebrow">EXAM RESULT</span><h1>{_school_html(exam.get('title', 'امتحان'))}</h1><p>پاسخ شما ثبت شده است؛ امکان ارسال دوباره وجود ندارد.</p></section><section class="ario-school-panel"><h3>نتیجهٔ امتحان</h3><div class="ario-school-kpis"><div class="ario-school-kpi"><strong>{_school_html(existing.get('correct_count', 0))}/{_school_html(existing.get('total', len(questions)))}</strong><span>پاسخ صحیح</span></div><div class="ario-school-kpi"><strong>{_school_html(existing.get('score_20', 0))}</strong><span>نمره از ۲۰</span></div><div class="ario-school-kpi"><strong>{_school_html(existing.get('percent', 0))}%</strong><span>درصد</span></div></div><p style="color:#9fb5cf">زمان ارسال: {_school_html(existing.get('submitted_at', ''))}</p></section></main>'''
+        content = f'''<main class="ario-school-wrap"><a class="ario-school-back" href="/school/exams">بازگشت به امتحان‌ها</a><section class="ario-school-hero"><span class="ario-school-eyebrow">EXAM RESULT</span><h1>{_school_html(exam.get('title', 'امتحان'))}</h1><p>پاسخ شما ثبت شده است؛ امکان ارسال دوباره وجود ندارد.</p></section><section class="ario-school-panel"><h3>نتیجهٔ امتحان</h3><div class="ario-school-kpis"><div class="ario-school-kpi"><strong>{_school_html(existing.get('correct_count', 0))}/{_school_html(existing.get('total', len(questions)))}</strong><span>پاسخ صحیح</span></div><div class="ario-school-kpi"><strong>{_school_html(existing.get('score_20', 0))}</strong><span>نمره از ۲۰</span></div><div class="ario-school-kpi"><strong>{_school_html(existing.get('percent', 0))}%</strong><span>درصد</span></div></div><p style="color:#9fb5cf">زمان ارسال: {_school_html(_ario_shamsi_date(existing.get('submitted_at', '')))}</p></section></main>'''
         return _school_page(content, 'نتیجه امتحان')
     token = _school_csrf()
     if request.method == 'POST':
@@ -7643,7 +8564,7 @@ def ario_school_take_exam(exam_id):
         total = len(questions)
         percent = round((correct_count / total) * 100, 1) if total else 0
         score_20 = round((correct_count / total) * 20, 2) if total else 0
-        attempts.append({'id': secrets.token_urlsafe(9), 'exam_id': exam_id, 'student': username, 'answers': answers, 'correct_count': correct_count, 'total': total, 'percent': percent, 'score_20': score_20, 'submitted_at': datetime.now().strftime('%Y-%m-%d %H:%M')})
+        attempts.append({'id': secrets.token_urlsafe(9), 'exam_id': exam_id, 'student': username, 'answers': answers, 'correct_count': correct_count, 'total': total, 'percent': percent, 'score_20': score_20, 'submitted_at': _school_now().strftime('%Y-%m-%d %H:%M')})
         save_data(data)
         return redirect(url_for('ario_school_take_exam', exam_id=exam_id, submitted='1'))
     question_blocks = []
@@ -7664,7 +8585,7 @@ def ario_school_exam_results(exam_id):
     exam = next((e for e in portal.get('exams', []) if e.get('id') == exam_id), None)
     if not exam: abort(404)
     results = [a for a in portal.get('exam_attempts', []) if a.get('exam_id') == exam_id]
-    rows = ''.join(f'<tr><td>{i}</td><td>{_school_html(a.get("student", ""))}</td><td>{_school_html(a.get("correct_count", 0))} از {_school_html(a.get("total", 0))}</td><td>{_school_html(a.get("score_20", 0))} از ۲۰</td><td>{_school_html(a.get("percent", 0))}%</td><td>{_school_html(a.get("submitted_at", ""))}</td></tr>' for i, a in enumerate(results, 1))
+    rows = ''.join(f'<tr><td>{i}</td><td>{_school_html(a.get("student", ""))}</td><td>{_school_html(a.get("correct_count", 0))} از {_school_html(a.get("total", 0))}</td><td>{_school_html(a.get("score_20", 0))} از ۲۰</td><td>{_school_html(a.get("percent", 0))}%</td><td>{_school_html(_ario_shamsi_date(a.get("submitted_at", "")))}</td></tr>' for i, a in enumerate(results, 1))
     cls = portal.get('classes', {}).get(exam.get('class_id'), {})
     content = f'''<main class="ario-school-wrap"><a class="ario-school-back" href="/school/exams">بازگشت به مرکز امتحان</a><section class="ario-school-hero"><span class="ario-school-eyebrow">EXAM REPORT</span><h1>نتایج · {_school_html(exam.get('title', 'امتحان'))}</h1><p>{_school_html(_school_class_label(cls))} · {_school_html(exam.get('subject', ''))} · {len(results)} شرکت‌کننده</p></section><div class="ario-school-table-wrap"><table class="ario-school-table"><thead><tr><th>ردیف</th><th>دانش‌آموز</th><th>پاسخ صحیح</th><th>نمره</th><th>درصد</th><th>زمان ارسال</th></tr></thead><tbody>{rows or '<tr><td colspan="6">هنوز دانش‌آموزی در این امتحان شرکت نکرده است.</td></tr>'}</tbody></table></div></main>'''
     return _school_page(content, 'نتایج امتحان')
@@ -7746,7 +8667,7 @@ def _ario_parent_child_academic_data(data, portal, student_username):
                 'date': item.get('date', ''), 'subject': item.get('subject', ''),
                 'title': item.get('title', ''), 'score': item.get('scores', {}).get(student_username)
             })
-    grades.sort(key=lambda item: item.get('date', ''), reverse=True)
+    grades.sort(key=lambda item: _ario_parse_school_date(item.get('date', ''), default='0000-00-00'), reverse=True)
     numeric_scores = []
     for item in grades:
         try:
@@ -7765,7 +8686,7 @@ def _ario_parent_child_academic_data(data, portal, student_username):
             'due_date': item.get('due_date', ''), 'submitted': bool(submission),
             'submitted_at': submission.get('submitted_at', '') if submission else ''
         })
-    homework.sort(key=lambda item: item.get('due_date') or '9999-99-99')
+    homework.sort(key=lambda item: _ario_parse_school_date(item.get('due_date') or '', default='9999-99-99'))
 
     exams = []
     attempts = portal.get('exam_attempts', [])
@@ -8005,7 +8926,7 @@ def ario_parent_dashboard():
             f'<article class="ario-school-panel"><span class="ario-school-chip">{_school_html(item.get("target_label", "اطلاعیه مدرسه"))}</span>'
             f'<h3 style="margin-top:10px">{_school_html(item.get("title", "اطلاعیه"))}</h3>'
             f'<p style="white-space:pre-wrap;color:#bfd0e3;line-height:2">{_school_html(item.get("text", ""))}</p>'
-            f'<small style="color:#91b0d0">{_school_html(item.get("created_at", ""))}</small></article>'
+            f'<small style="color:#91b0d0">{_school_html(_ario_shamsi_date(item.get("created_at", "")))}</small></article>'
         )
     announcements_html = ''.join(announcement_cards) or '<div class="ario-school-empty">هنوز اطلاعیه‌ای برای کلاس فرزندان متصل‌شده منتشر نشده است.</div>'
     child_content = ''.join(child_cards) or '<div class="ario-school-empty">هنوز دانش‌آموزی به حساب شما متصل نشده است. لطفاً برای اتصال فرزند یا فرزندان با مدیر مدرسه آریو هماهنگ کنید. پس از اتصال توسط مدیر، پروندهٔ آموزشی آن‌ها همین‌جا نمایش داده می‌شود.</div>'
@@ -8044,19 +8965,19 @@ def ario_parent_child(child_index):
     student_name = student_account.get('full_name') or student_username
 
     attendance_rows = ''.join(
-        f'<tr><td>{_school_html(item["date"])}</td><td>{_school_html(item["status"])}</td><td>{_school_html(item["source"])}</td><td>{_school_html(item["time"])}</td></tr>'
+        f'<tr><td>{_school_html(_ario_shamsi_date(item["date"]))}</td><td>{_school_html(item["status"])}</td><td>{_school_html(item["source"])}</td><td>{_school_html(_ario_shamsi_date(item["time"]))}</td></tr>'
         for item in academic['attendance']
     ) or '<tr><td colspan="4">هنوز گزارشی ثبت نشده است.</td></tr>'
     grade_rows = ''.join(
-        f'<tr><td>{_school_html(item.get("date", ""))}</td><td>{_school_html(item.get("subject", ""))}</td><td>{_school_html(item.get("title", ""))}</td><td>{_school_html(item.get("score", ""))} از ۲۰</td></tr>'
+        f'<tr><td>{_school_html(_ario_shamsi_date(item.get("date", "")))}</td><td>{_school_html(item.get("subject", ""))}</td><td>{_school_html(item.get("title", ""))}</td><td>{_school_html(item.get("score", ""))} از ۲۰</td></tr>'
         for item in academic['grades']
     ) or '<tr><td colspan="4">هنوز نمره‌ای برای این دانش‌آموز ثبت نشده است.</td></tr>'
     homework_rows = ''.join(
-        f'<tr><td>{_school_html(item.get("subject", ""))}</td><td>{_school_html(item.get("title", ""))}</td><td>{_school_html(item.get("due_date") or "—")}</td><td>{"ارسال شده" if item.get("submitted") else "ارسال نشده"}</td><td>{_school_html(item.get("submitted_at", "—") or "—")}</td></tr>'
+        f'<tr><td>{_school_html(item.get("subject", ""))}</td><td>{_school_html(item.get("title", ""))}</td><td>{_school_html(_ario_shamsi_date(item.get("due_date")) if item.get("due_date") else "—")}</td><td>{"ارسال شده" if item.get("submitted") else "ارسال نشده"}</td><td>{_school_html(_ario_shamsi_date(item.get("submitted_at", "—") or "—"))}</td></tr>'
         for item in academic['homework']
     ) or '<tr><td colspan="5">تکلیفی برای این کلاس ثبت نشده است.</td></tr>'
     exam_rows = ''.join(
-        f'<tr><td>{_school_html(item.get("title", ""))}</td><td>{_school_html(item.get("subject", ""))}</td><td>{("شرکت کرده · " + str(item.get("score")) + " از ۲۰") if item.get("attempted") else "شرکت نکرده"}</td><td>{_school_html(item.get("submitted_at", "—") or "—")}</td></tr>'
+        f'<tr><td>{_school_html(item.get("title", ""))}</td><td>{_school_html(item.get("subject", ""))}</td><td>{("شرکت کرده · " + str(item.get("score")) + " از ۲۰") if item.get("attempted") else "شرکت نکرده"}</td><td>{_school_html(_ario_shamsi_date(item.get("submitted_at", "—") or "—"))}</td></tr>'
         for item in academic['exams']
     ) or '<tr><td colspan="4">هنوز امتحانی برای این کلاس منتشر نشده است.</td></tr>'
     timetable_rows = ''.join(
@@ -8067,7 +8988,7 @@ def ario_parent_child(child_index):
         f'<article class="ario-school-panel"><span class="ario-school-chip">{_school_html(item.get("target_label", "اطلاعیه"))}</span>'
         f'<h3 style="margin-top:9px">{_school_html(item.get("title", ""))}</h3>'
         f'<p style="white-space:pre-wrap;color:#bfd0e3;line-height:2">{_school_html(item.get("text", ""))}</p>'
-        f'<small style="color:#91b0d0">{_school_html(item.get("created_at", ""))}</small></article>'
+        f'<small style="color:#91b0d0">{_school_html(_ario_shamsi_date(item.get("created_at", "")))}</small></article>'
         for item in academic['announcements']
     ) or '<div class="ario-school-empty">اطلاعیه‌ای وجود ندارد.</div>'
     average = f'{academic["grade_average"]:.2f}' if academic['grade_average'] is not None else '—'
