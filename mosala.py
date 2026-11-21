@@ -7021,19 +7021,120 @@ def ario_manifest():
     return Response(json.dumps(manifest, ensure_ascii=False), mimetype='application/manifest+json', headers={'Cache-Control': 'public, max-age=3600'})
 
 
+@app.route('/healthz')
+def ario_health_check():
+    """Lightweight public health endpoint used to check/wake the web service."""
+    return Response(
+        json.dumps({'ok': True, 'service': 'ario'}, ensure_ascii=False),
+        mimetype='application/json',
+        headers={'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0', 'Pragma': 'no-cache'},
+    )
+
+
 @app.route('/offline')
 def ario_offline_page():
-    html = """<!doctype html><html lang="fa" dir="rtl"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#0d2743"><title>آریو | بدون اتصال</title><style>*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:radial-gradient(circle at 20% 10%,#244a72,#07182b 65%);font-family:Tahoma,sans-serif;color:#eff6ff;padding:22px}.card{max-width:520px;text-align:center;padding:36px;border:1px solid #7895b833;border-radius:26px;background:#ffffff0b;box-shadow:0 25px 80px #0005}h1{font-size:1.7rem}p{color:#bfd0e4;line-height:2}a{display:inline-block;margin-top:12px;padding:11px 18px;border-radius:12px;background:#8fe8d2;color:#08243c;text-decoration:none;font-weight:bold}</style><main class="card"><h1>اتصال اینترنت برقرار نیست</h1><p>برای ورود به بخش‌های مدرسه آریو به اینترنت نیاز داری. بعد از اتصال دوباره، صفحه را تازه‌سازی کن.</p><a href="/">تلاش دوباره</a></main></html>"""
-    return Response(html, mimetype='text/html; charset=utf-8')
+    html = """<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#0d2743"><title>آریو | اتصال به سرور</title>
+<style>
+*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:radial-gradient(circle at 20% 10%,#244a72,#07182b 65%);font-family:Tahoma,sans-serif;color:#eff6ff;padding:22px}
+.card{width:min(100%,520px);text-align:center;padding:clamp(24px,6vw,38px);border:1px solid #7895b833;border-radius:26px;background:#ffffff0b;box-shadow:0 25px 80px #0005}
+.logo{width:58px;height:58px;margin:0 auto 15px;border-radius:17px;background:#102f50;color:#e9c98d;display:grid;place-items:center;font:bold 34px Georgia,serif;border:1px solid #e9c98d55}
+h1{font-size:clamp(1.25rem,4vw,1.7rem);margin:8px 0 12px}p{color:#bfd0e4;line-height:2;margin:0 0 14px}
+.status{min-height:28px;font-size:.86rem;color:#9fe8d3;margin:12px 0}
+button{display:inline-block;margin-top:8px;padding:13px 22px;border:0;border-radius:13px;background:#8fe8d2;color:#08243c;font-weight:bold;font-size:1rem;cursor:pointer}
+button:disabled{opacity:.7;cursor:wait}.hint{font-size:.78rem;color:#91a8c2;margin-top:17px}
+</style></head>
+<body><main class="card"><div class="logo" aria-hidden="true">A</div>
+<h1>اتصال به سایت آریو برقرار نشد</h1>
+<p id="offline-message">ممکن است اینترنت دستگاه قطع باشد یا سرور آریو در حال راه‌اندازی دوباره باشد. لازم نیست فوراً تنظیمات گوشی یا مرورگر را تغییر بدهی.</p>
+<div class="status" id="retry-status" role="status" aria-live="polite"></div>
+<button type="button" id="retry-button">تلاش دوباره برای اتصال</button>
+<div class="hint">با وصل‌شدن سرور، صفحهٔ اصلی آریو خودکار باز می‌شود.</div>
+</main>
+<script>
+(function(){
+  const button=document.getElementById('retry-button');
+  const status=document.getElementById('retry-status');
+  const message=document.getElementById('offline-message');
+  if(!navigator.onLine){message.textContent='اتصال اینترنت دستگاه برقرار نیست. پس از وصل‌شدن اینترنت، روی دکمهٔ تلاش دوباره بزن.';}
+  window.addEventListener('online',()=>{message.textContent='اینترنت دستگاه وصل شد. اکنون در حال بررسی سرور آریو هستیم.';});
+  window.addEventListener('offline',()=>{message.textContent='اتصال اینترنت دستگاه قطع شده است. پس از وصل‌شدن اینترنت، دوباره تلاش کن.';});
+  let busy=false;
+  button.addEventListener('click',async function(){
+    if(busy)return;busy=true;button.disabled=true;
+    const deadline=Date.now()+60000;let attempt=0;
+    while(Date.now()<deadline){
+      attempt++;
+      status.textContent='در حال اتصال به سرور آریو… تلاش '+attempt;
+      try{
+        const response=await fetch('/healthz?check='+Date.now(),{method:'GET',cache:'no-store',credentials:'same-origin'});
+        if(response.ok){
+          status.textContent='اتصال برقرار شد؛ در حال بازکردن سایت…';
+          window.location.replace('/?reconnect='+Date.now());
+          return;
+        }
+      }catch(error){}
+      await new Promise(resolve=>setTimeout(resolve,2500));
+    }
+    status.textContent='هنوز سرور پاسخ نداده است. چند لحظه بعد دوباره تلاش کن.';
+    button.disabled=false;busy=false;
+  });
+})();
+</script></body></html>"""
+    return Response(
+        html,
+        mimetype='text/html; charset=utf-8',
+        headers={'Cache-Control': 'no-store, no-cache, must-revalidate, max-age=0', 'Pragma': 'no-cache'},
+    )
 
 
 @app.route('/sw.js')
 def ario_service_worker():
-    script = r"""const CACHE='ario-static-v2';
-self.addEventListener('install',event=>event.waitUntil((async()=>{const c=await caches.open(CACHE);await c.addAll(['/offline','/favicon.ico','/ario-pwa-icon.svg','/ario-pwa-icon-192.png','/ario-pwa-icon-512.png']);await self.skipWaiting();})()));
-self.addEventListener('activate',event=>event.waitUntil((async()=>{const keys=await caches.keys();await Promise.all(keys.filter(k=>k!==CACHE).map(k=>caches.delete(k)));await self.clients.claim();})()));
-self.addEventListener('fetch',event=>{const req=event.request;if(req.method!=='GET')return;const url=new URL(req.url);if(url.origin!==self.location.origin)return;if(url.pathname.startsWith('/ario-image/')){event.respondWith((async()=>{const cache=await caches.open(CACHE);const cached=await cache.match(req);const network=fetch(req).then(res=>{if(res.ok)cache.put(req,res.clone());return res;}).catch(()=>cached);return cached||network;})());return;}if(req.mode==='navigate'){event.respondWith(fetch(req).catch(async()=>await caches.match('/offline')));}});"""
-    return Response(script, mimetype='application/javascript', headers={'Cache-Control': 'no-cache', 'Service-Worker-Allowed': '/'})
+    # v3 removes the previous worker/cache and retries transient Render cold starts.
+    script = r"""const CACHE='ario-static-v3';
+const PRECACHE=['/offline','/favicon.ico','/ario-pwa-icon.svg','/ario-pwa-icon-192.png','/ario-pwa-icon-512.png'];
+self.addEventListener('install',event=>event.waitUntil((async()=>{
+  const cache=await caches.open(CACHE);
+  await Promise.all(PRECACHE.map(async path=>{try{await cache.add(path);}catch(error){}}));
+  await self.skipWaiting();
+})()));
+self.addEventListener('activate',event=>event.waitUntil((async()=>{
+  const keys=await caches.keys();
+  await Promise.all(keys.filter(key=>key.startsWith('ario-static-')&&key!==CACHE).map(key=>caches.delete(key)));
+  await self.clients.claim();
+})()));
+async function navigationWithRetry(request){
+  const delays=[0,1200,2600,5200];
+  for(let attempt=0;attempt<delays.length;attempt++){
+    if(delays[attempt])await new Promise(resolve=>setTimeout(resolve,delays[attempt]));
+    try{
+      const response=await fetch(new Request(request,{cache:'no-store'}));
+      if(response.ok)return response;
+      if(![429,500,502,503,504].includes(response.status))return response;
+    }catch(error){}
+  }
+  return (await caches.match('/offline'))||new Response('اتصال به سایت آریو برقرار نشد. صفحه را دوباره بارگذاری کن.',{status:503,headers:{'Content-Type':'text/plain; charset=utf-8','Cache-Control':'no-store'}});
+}
+self.addEventListener('fetch',event=>{
+  const request=event.request;
+  if(request.method!=='GET')return;
+  const url=new URL(request.url);
+  if(url.origin!==self.location.origin)return;
+  if(url.pathname.startsWith('/ario-image/')){
+    event.respondWith((async()=>{
+      const cache=await caches.open(CACHE);const cached=await cache.match(request);
+      try{const response=await fetch(request);if(response.ok)cache.put(request,response.clone());return response;}
+      catch(error){return cached||Response.error();}
+    })());
+    return;
+  }
+  if(request.mode==='navigate')event.respondWith(navigationWithRetry(request));
+});
+"""
+    return Response(script, mimetype='application/javascript', headers={'Cache-Control': 'no-cache, no-store, must-revalidate', 'Service-Worker-Allowed': '/'})
 
 
 # ======================================================================
@@ -10354,3 +10455,4 @@ if __name__ == '__main__':
         print('WARNING: Set a stable, random SECRET_KEY environment variable in production; the temporary random key changes on each restart.')
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
+
