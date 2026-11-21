@@ -7,9 +7,13 @@ import secrets
 import hmac
 import hashlib
 import re
+import csv
+import io
+import zipfile
+import shutil
 from datetime import datetime
 from urllib.parse import urlparse
-from flask import Flask, render_template_string, request, redirect, url_for, session, abort, Response, g
+from flask import Flask, render_template_string, request, redirect, url_for, session, abort, Response, g, send_file, has_request_context
 from werkzeug.security import generate_password_hash, check_password_hash
 from markupsafe import escape
 
@@ -196,7 +200,9 @@ def ario_image(name):
         abort(404)
     return Response(base64.b64decode(payload), mimetype='image/jpeg', headers={'Cache-Control': 'public, max-age=86400'})
 
-app.secret_key = os.environ.get('SECRET_KEY', 'CHANGE-THIS-SECRET-KEY-BEFORE-DEPLOYMENT')
+app.secret_key = os.environ.get('SECRET_KEY') or secrets.token_urlsafe(48)
+app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE='Lax')
+app.config['SESSION_COOKIE_SECURE'] = os.environ.get('SESSION_COOKIE_SECURE', '1').strip().lower() not in ('0', 'false', 'no')
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_FILE = os.path.join(BASE_DIR, 'school_data.json')
 
@@ -398,6 +404,11 @@ def save_data(data):
                 dst.flush()
                 os.fsync(dst.fileno())
         os.replace(temp_path, DATA_FILE)
+        try:
+            if has_request_context() and session.get('username') and '_suite_audit' in globals():
+                _suite_audit(session.get('username'), 'ذخیره تغییرات اطلاعات مدرسه', 'school_data.json', 'تغییر اطلاعات اصلی سایت یا مدرسه')
+        except Exception:
+            pass
     finally:
         if os.path.exists(temp_path):
             os.remove(temp_path)
@@ -7777,6 +7788,7 @@ def ario_school_dashboard():
       <section class="ario-school-hero"><div class="ario-hub-hero-line"><div class="ario-school-eyebrow">ARIO SMART SCHOOL · CONTROL CENTER</div><div class="ario-hub-identity"><span class="ario-hub-live-dot"></span><span>سامانه آموزشی آریو</span><span class="ario-hub-date">{_school_html(today_fa)}</span></div></div>
         <h1>{heading}</h1><p>{subtitle}</p><div class="ario-hub-hero-bottom"><span class="ario-hub-role-pill"><i class="fas fa-user-shield"></i> {_school_html(username)} · {_school_html(role)}</span><div class="ario-school-actions">{top_actions}</div></div>
       </section>
+      {_suite_dashboard_quicklinks(role, is_admin, class_access_pending)}
       {kpi_block}
       {side_block}
       {class_block}
@@ -8951,6 +8963,7 @@ def ario_parent_dashboard():
         f'<p>سلام {_school_html(parent_account.get("full_name") or username)}؛ وضعیت آموزشی فرزندانت را در یک صفحه دنبال کن. اطلاعات فقط‌خواندنی است و هر والد فقط پروندهٔ فرزندانی را می‌بیند که مدیر مدرسه به حساب او متصل کرده است.</p>'
         f'<div class="ario-school-actions"><span class="ario-school-chip">{len(children)} فرزند متصل از ۳</span>'
         f'<a class="ario-school-btn" href="/profile">حساب من</a><a class="ario-school-btn" href="/logout">خروج</a></div></section>'
+        f'{_suite_dashboard_quicklinks('والد', False, False, parent=True)}'
         f'<section class="ario-school-section"><div class="ario-school-section-head"><div><h2>فرزندان من</h2>'
         f'<p>گزارش حضور، نمرات، تکالیف، امتحان‌ها و برنامهٔ هر فرزند</p></div></div>'
         f'<div class="ario-parent-children-grid">{child_content}</div></section>'
@@ -9013,6 +9026,7 @@ def ario_parent_child(child_index):
         f'<main class="ario-school-wrap ario-parent-detail"><a class="ario-school-back" href="/parents">بازگشت به پنل خانواده</a>'
         f'<section class="ario-school-hero"><span class="ario-school-eyebrow">STUDENT ACADEMIC PROFILE</span>'
         f'<h1>{_school_html(student_name)}</h1><p>{_school_html(_school_class_label(cls))} · نام کاربری: {_school_html(student_username)}</p></section>'
+        f'<div class="ario-school-actions"><a class="ario-school-btn primary" href="/school/report-card/{_school_html(student_username)}">مشاهده و چاپ کارنامه</a></div>'
         f'<section class="ario-school-kpis"><div class="ario-school-kpi"><strong>{_school_html(average)}</strong><span>میانگین نمره‌ها از ۲۰</span></div>'
         f'<div class="ario-school-kpi"><strong>{ac["حاضر"]}</strong><span>حضورهای ثبت‌شده در ۳۰ گزارش اخیر</span></div>'
         f'<div class="ario-school-kpi"><strong>{ac["غایب"]}</strong><span>غیبت‌های ثبت‌شده</span></div>'
@@ -9036,11 +9050,1307 @@ def ario_parent_child(child_index):
     return response
 
 
+
+
+# ======================================================================
+# ARIO 3.0 – یکپارچه‌سازی پرونده‌ها، پیام‌رسان، تقویم، گزارش‌ها و پشتیبان
+# All new persistent features live in a separate SQLite database. Existing
+# school_data.json is never recreated or overwritten by these features.
+# ======================================================================
+ARIO_SUITE_DB = os.path.join(BASE_DIR, 'ario_suite.sqlite3')
+ARIO_SUITE_BACKUP_DIR = os.path.join(BASE_DIR, 'ario_backups')
+_SUITE_SCHEMA_VERSION = '1'
+
+
+def _suite_connect():
+    os.makedirs(BASE_DIR, exist_ok=True)
+    conn = sqlite3.connect(ARIO_SUITE_DB, timeout=20)
+    conn.row_factory = sqlite3.Row
+    conn.execute('PRAGMA foreign_keys=ON')
+    conn.execute('PRAGMA busy_timeout=20000')
+    try:
+        conn.execute('PRAGMA journal_mode=WAL')
+    except sqlite3.Error:
+        pass
+    return conn
+
+
+def _suite_init():
+    conn = _suite_connect()
+    try:
+        conn.executescript('''
+        CREATE TABLE IF NOT EXISTS suite_messages (
+            id TEXT PRIMARY KEY,
+            sender TEXT NOT NULL,
+            subject TEXT NOT NULL,
+            body TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            message_kind TEXT NOT NULL DEFAULT 'direct'
+        );
+        CREATE TABLE IF NOT EXISTS suite_message_recipients (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            message_id TEXT NOT NULL REFERENCES suite_messages(id) ON DELETE CASCADE,
+            recipient TEXT NOT NULL,
+            read_at TEXT NOT NULL DEFAULT '',
+            UNIQUE(message_id, recipient)
+        );
+        CREATE INDEX IF NOT EXISTS idx_suite_message_recipient ON suite_message_recipients(recipient, read_at);
+        CREATE INDEX IF NOT EXISTS idx_suite_message_sender ON suite_messages(sender, created_at);
+        CREATE TABLE IF NOT EXISTS suite_notifications (
+            id TEXT PRIMARY KEY,
+            recipient TEXT NOT NULL,
+            title TEXT NOT NULL,
+            body TEXT NOT NULL,
+            target_url TEXT NOT NULL DEFAULT '/school/notifications',
+            kind TEXT NOT NULL DEFAULT 'info',
+            created_at TEXT NOT NULL,
+            read_at TEXT NOT NULL DEFAULT ''
+        );
+        CREATE INDEX IF NOT EXISTS idx_suite_notifications_recipient ON suite_notifications(recipient, read_at, created_at);
+        CREATE TABLE IF NOT EXISTS suite_calendar_events (
+            id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            body TEXT NOT NULL,
+            event_date TEXT NOT NULL,
+            start_time TEXT NOT NULL DEFAULT '',
+            event_type TEXT NOT NULL DEFAULT 'مدرسه',
+            class_id TEXT NOT NULL DEFAULT '',
+            created_by TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_suite_calendar_date ON suite_calendar_events(event_date, class_id);
+        CREATE TABLE IF NOT EXISTS suite_audit_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            actor TEXT NOT NULL,
+            action TEXT NOT NULL,
+            target TEXT NOT NULL DEFAULT '',
+            details TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_suite_audit_date ON suite_audit_log(created_at DESC);
+        CREATE TABLE IF NOT EXISTS suite_meta (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        );
+        ''')
+        conn.execute('INSERT OR REPLACE INTO suite_meta(key,value) VALUES(?,?)', ('schema_version', _SUITE_SCHEMA_VERSION))
+        conn.commit()
+    finally:
+        conn.close()
+    try:
+        os.chmod(ARIO_SUITE_DB, 0o600)
+    except OSError:
+        pass
+
+
+def _suite_now_label():
+    try:
+        return _school_now().strftime('%Y-%m-%d %H:%M:%S')
+    except Exception:
+        return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+
+def _suite_audit(actor, action, target='', details=''):
+    try:
+        _suite_init()
+        conn = _suite_connect()
+        try:
+            conn.execute(
+                'INSERT INTO suite_audit_log(actor,action,target,details,created_at) VALUES(?,?,?,?,?)',
+                (str(actor or 'system')[:80], str(action or '')[:120], str(target or '')[:160], str(details or '')[:500], _suite_now_label())
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        pass
+
+
+def _suite_notify(recipients, title, body, target_url='/school/notifications', kind='info'):
+    names = sorted({str(name).strip() for name in (recipients or []) if str(name).strip()})
+    if not names:
+        return 0
+    _suite_init()
+    conn = _suite_connect()
+    try:
+        now = _suite_now_label()
+        rows = [
+            (secrets.token_urlsafe(14), name, str(title or 'اعلان جدید')[:120], str(body or '')[:500],
+             str(target_url or '/school/notifications')[:240], str(kind or 'info')[:30], now)
+            for name in names
+        ]
+        conn.executemany(
+            'INSERT INTO suite_notifications(id,recipient,title,body,target_url,kind,created_at) VALUES(?,?,?,?,?,?,?)',
+            rows
+        )
+        conn.commit()
+        return len(rows)
+    finally:
+        conn.close()
+
+
+def _suite_unread_count(username):
+    if not username:
+        return 0
+    _suite_init()
+    conn = _suite_connect()
+    try:
+        return int(conn.execute('SELECT COUNT(*) FROM suite_notifications WHERE recipient=? AND read_at=\'\'', (username,)).fetchone()[0])
+    finally:
+        conn.close()
+
+
+def _suite_user_label(data, username):
+    account = data.get('users', {}).get(username, {})
+    full_name = str(account.get('full_name') or '').strip()
+    return full_name if full_name else str(username)
+
+
+def _suite_account_active_for_class(account):
+    return isinstance(account, dict) and _school_class_access_approved(account)
+
+
+def _suite_current_context(allow_parent=True):
+    username = session.get('username', '')
+    if not username:
+        return None
+    data, portal = _school_load()
+    account = data.get('users', {}).get(username)
+    if not isinstance(account, dict):
+        session.clear()
+        return None
+    role = account.get('role', session.get('role', ''))
+    if not allow_parent and role == 'والد':
+        abort(403)
+    return data, portal, username, role, account
+
+
+def _suite_is_admin(role=None):
+    return (role or session.get('role')) in ADMIN_ROLES
+
+
+def _suite_visible_class_ids(data, portal, username, role):
+    classes = portal.get('classes', {})
+    account = data.get('users', {}).get(username, {})
+    if _suite_is_admin(role):
+        return sorted(classes, key=lambda cid: (_school_grade_number(classes[cid].get('grade_number'), cid), int(str(cid).split('-')[-1]) if str(cid).split('-')[-1].isdigit() else 99))
+    if role == 'معلم' and _suite_account_active_for_class(account):
+        return [cid for cid, cls in classes.items() if username in cls.get('teacher_usernames', [])]
+    if role == 'دانش‌آموز' and _suite_account_active_for_class(account):
+        cid = account.get('school_class_id')
+        return [cid] if cid in classes else []
+    if role == 'والد':
+        return [student.get('school_class_id') for _, student in _ario_parent_linked_children(data, portal, username)
+                if student.get('school_class_id') in classes]
+    return []
+
+
+def _suite_can_view_student(data, portal, target_username):
+    target = data.get('users', {}).get(target_username, {})
+    if not isinstance(target, dict) or target.get('role') != 'دانش‌آموز':
+        return False
+    current = session.get('username', '')
+    role = session.get('role', '')
+    if current == target_username or _suite_is_admin(role):
+        return True
+    class_id = target.get('school_class_id')
+    if role == 'معلم':
+        teacher_account = data.get('users', {}).get(current, {})
+        return (_suite_account_active_for_class(teacher_account) and class_id in portal.get('classes', {})
+                and current in portal.get('classes', {}).get(class_id, {}).get('teacher_usernames', []))
+    if role == 'والد':
+        return target_username in {name for name, _ in _ario_parent_linked_children(data, portal, current)}
+    return False
+
+
+def _suite_parents_for_students(portal, student_usernames):
+    wanted = set(student_usernames)
+    result = []
+    for parent_username, linked in portal.get('parent_links', {}).items():
+        if any(student in wanted for student in (linked if isinstance(linked, list) else [])):
+            result.append(parent_username)
+    return result
+
+
+def _suite_class_recipients(data, portal, class_id):
+    cls = portal.get('classes', {}).get(class_id, {})
+    students = _school_class_students(data, class_id)
+    recipients = set(students)
+    recipients.update(name for name in cls.get('teacher_usernames', []) if name in data.get('users', {}))
+    recipients.update(_suite_parents_for_students(portal, students))
+    return recipients
+
+
+def _suite_allowed_direct_recipients(data, portal, username, role):
+    users = data.get('users', {})
+    if _suite_is_admin(role):
+        allowed = {name for name, account in users.items() if name != username and account.get('role') in ('مدیر سایت (شما)', 'مدیر مدرسه', 'معلم', 'دانش‌آموز', 'والد')}
+    else:
+        allowed = {name for name, account in users.items() if account.get('role') in ADMIN_ROLES}
+        if role == 'معلم' and _suite_account_active_for_class(users.get(username, {})):
+            for cid in _school_teacher_classes(portal, username):
+                allowed.update(_school_class_students(data, cid))
+                allowed.update(_suite_parents_for_students(portal, _school_class_students(data, cid)))
+        elif role == 'دانش‌آموز' and _suite_account_active_for_class(users.get(username, {})):
+            cid = users.get(username, {}).get('school_class_id')
+            if cid in portal.get('classes', {}):
+                allowed.update(portal['classes'][cid].get('teacher_usernames', []))
+        elif role == 'والد':
+            child_names = [name for name, _ in _ario_parent_linked_children(data, portal, username)]
+            child_classes = {users.get(name, {}).get('school_class_id') for name in child_names}
+            for cid in child_classes:
+                if cid in portal.get('classes', {}):
+                    allowed.update(portal['classes'][cid].get('teacher_usernames', []))
+    allowed.discard(username)
+    return sorted(name for name in allowed if name in users)
+
+
+def _suite_dashboard_quicklinks(role, is_admin=False, class_access_pending=False, parent=False):
+    items = []
+    if parent or role == 'والد':
+        items = [
+            ('پیام‌رسان مدرسه', '/school/messages', 'fa-comments'),
+            ('تقویم مدرسه', '/school/calendar', 'fa-calendar-days'),
+            ('اعلان‌های من', '/school/notifications', 'fa-bell'),
+        ]
+    elif is_admin:
+        items = [
+            ('اتاق فرمان آریو', '/school/command-center', 'fa-gauge-high'),
+            ('پیام‌رسان', '/school/messages', 'fa-comments'),
+            ('تقویم مدرسه', '/school/calendar', 'fa-calendar-days'),
+            ('گزارش‌های تحلیلی', '/school/reports', 'fa-chart-pie'),
+            ('پرونده دانش‌آموزان', '/school/students', 'fa-id-card'),
+            ('پشتیبان‌گیری', '/school/backup', 'fa-database'),
+        ]
+    elif role == 'معلم':
+        items = [
+            ('میزکار دبیر', '/school/teacher-workspace', 'fa-chalkboard-user'),
+            ('پیام‌رسان', '/school/messages', 'fa-comments'),
+            ('تقویم مدرسه', '/school/calendar', 'fa-calendar-days'),
+            ('اعلان‌ها', '/school/notifications', 'fa-bell'),
+        ]
+        if not class_access_pending:
+            items.append(('پرونده دانش‌آموزان', '/school/students', 'fa-id-card'))
+    elif role == 'دانش‌آموز':
+        items = [
+            ('کارنامه من', f'/school/report-card/{session.get("username", "")}', 'fa-chart-line'),
+            ('پیام‌رسان', '/school/messages', 'fa-comments'),
+            ('تقویم مدرسه', '/school/calendar', 'fa-calendar-days'),
+            ('اعلان‌ها', '/school/notifications', 'fa-bell'),
+        ]
+    if not items:
+        return ''
+    return '<nav class="ario-suite-quicklinks" aria-label="امکانات تکمیلی آریو">' + ''.join(
+        f'<a href="{_school_html(url)}"><i class="fas {_school_html(icon)}"></i><span>{_school_html(label)}</span></a>'
+        for label, url, icon in items
+    ) + '</nav>' + '''<style>
+    .ario-suite-quicklinks{display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:9px;margin:16px 0 20px}
+    .ario-suite-quicklinks a{display:flex;align-items:center;gap:10px;min-width:0;padding:13px 14px;border-radius:14px;text-decoration:none;color:#eaf2ff;background:linear-gradient(135deg,#12395e,#0a2038);border:1px solid rgba(157,192,234,.2);font-size:.78rem;font-weight:850;transition:transform .2s,border-color .2s}
+    .ario-suite-quicklinks a:hover{transform:translateY(-2px);border-color:rgba(141,230,208,.55)}.ario-suite-quicklinks i{color:#8ce8d0;font-size:1rem}
+    body[data-theme="light"] .ario-suite-quicklinks a{background:#f1f6fc;color:#1b3858;border-color:#d8e4f1}
+    @media(max-width:520px){.ario-suite-quicklinks{grid-template-columns:repeat(2,minmax(0,1fr))}.ario-suite-quicklinks a{padding:11px;font-size:.72rem}}
+    </style>'''
+
+
+def _suite_nav(active=''):
+    role = session.get('role', '')
+    is_admin = _suite_is_admin(role)
+    items = []
+    if role == 'والد':
+        items.append(('پنل خانواده', '/parents', 'fa-people-roof', 'parents'))
+    else:
+        items.append(('مدرسه‌یار', '/school', 'fa-graduation-cap', 'school'))
+    if is_admin:
+        items.extend([
+            ('اتاق فرمان', '/school/command-center', 'fa-gauge-high', 'command'),
+            ('میزکار دبیران', '/school/teacher-workspace', 'fa-chalkboard-user', 'teachers'),
+            ('پرونده‌ها', '/school/students', 'fa-id-card', 'students'),
+            ('گزارش‌ها', '/school/reports', 'fa-chart-pie', 'reports'),
+        ])
+    elif role == 'معلم':
+        items.extend([('میزکار من', '/school/teacher-workspace', 'fa-chalkboard-user', 'teachers'), ('پرونده دانش‌آموزان', '/school/students', 'fa-id-card', 'students')])
+    elif role == 'دانش‌آموز':
+        items.append(('کارنامه من', f'/school/report-card/{session.get("username", "")}', 'fa-chart-line', 'report'))
+    items.extend([
+        ('پیام‌ها', '/school/messages', 'fa-comments', 'messages'),
+        ('تقویم', '/school/calendar', 'fa-calendar-days', 'calendar'),
+        ('اعلان‌ها', '/school/notifications', 'fa-bell', 'notifications'),
+    ])
+    if is_admin:
+        items.extend([('پشتیبان', '/school/backup', 'fa-database', 'backup'), ('گزارش فعالیت', '/school/audit', 'fa-clipboard-list', 'audit')])
+    count = _suite_unread_count(session.get('username', ''))
+    links = []
+    for label, url, icon, key in items:
+        selected = ' aria-current="page"' if active == key else ''
+        badge = f'<b class="ario-suite-badge">{count}</b>' if key == 'notifications' and count else ''
+        links.append(f'<a href="{_school_html(url)}"{selected}><i class="fas {_school_html(icon)}"></i><span>{_school_html(label)}</span>{badge}</a>')
+    return '<nav class="ario-suite-nav" aria-label="میان‌برهای سامانه">' + ''.join(links) + '''</nav><style>
+    .ario-suite-nav{display:flex;align-items:center;gap:7px;overflow-x:auto;padding:9px;margin:0 auto 18px;border:1px solid rgba(155,189,230,.18);border-radius:16px;background:rgba(8,26,45,.75);scrollbar-width:thin}
+    .ario-suite-nav a{position:relative;flex:0 0 auto;display:inline-flex;align-items:center;gap:7px;padding:9px 12px;border-radius:11px;color:#c6d8ec;text-decoration:none;font-size:.72rem;font-weight:800;white-space:nowrap}
+    .ario-suite-nav a[aria-current="page"],.ario-suite-nav a:hover{background:rgba(124,224,204,.12);color:#a5f0dd}.ario-suite-nav i{color:#8ee7d1}.ario-suite-badge{display:inline-grid;place-items:center;min-width:17px;height:17px;padding:0 4px;border-radius:99px;background:#e65e68;color:#fff;font-size:.62rem}
+    body[data-theme="light"] .ario-suite-nav{background:#f4f8fc;border-color:#dce6f1}.ario-suite-nav a{color:#38536f}body[data-theme="light"] .ario-suite-nav a[aria-current="page"],body[data-theme="light"] .ario-suite-nav a:hover{background:#e6f4f1;color:#146657}
+    @media(max-width:650px){.ario-suite-nav{margin-bottom:12px}.ario-suite-nav a{padding:9px 10px}}
+    </style>'''
+
+
+def _suite_page(content, title, active=''):
+    return _school_page(_suite_nav(active) + content, title, 'school')
+
+
+def _suite_current_student_academic(data, portal, student_username):
+    student = data.get('users', {}).get(student_username, {})
+    class_id = student.get('school_class_id')
+    if not class_id or class_id not in portal.get('classes', {}):
+        return None
+    return _ario_parent_child_academic_data(data, portal, student_username)
+
+
+def _suite_write_csv_response(rows, filename):
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    for row in rows:
+        writer.writerow(row)
+    payload = '\ufeff' + buffer.getvalue()
+    return Response(payload, mimetype='text/csv; charset=utf-8', headers={
+        'Content-Disposition': f'attachment; filename="{filename}"',
+        'Cache-Control': 'no-store'
+    })
+
+
+def _suite_make_backup(label='daily'):
+    _suite_init()
+    os.makedirs(ARIO_SUITE_BACKUP_DIR, exist_ok=True)
+    stamp = _school_now().strftime('%Y%m%d_%H%M%S')
+    safe_label = re.sub(r'[^a-zA-Z0-9_-]+', '_', str(label or 'manual'))[:20]
+    backup_path = os.path.join(ARIO_SUITE_BACKUP_DIR, f'ario_{safe_label}_{stamp}.zip')
+    temp_db = None
+    temp_presence = None
+    conn = None
+    try:
+        with zipfile.ZipFile(backup_path, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
+            if os.path.isfile(DATA_FILE):
+                archive.write(DATA_FILE, arcname='school_data.json')
+            if os.path.isfile(DATA_FILE + '.bak'):
+                archive.write(DATA_FILE + '.bak', arcname='school_data.json.bak')
+            if os.path.isfile(PRESENCE_DB):
+                fd, temp_presence = tempfile.mkstemp(prefix='ario_presence_snapshot_', suffix='.sqlite3', dir=BASE_DIR)
+                os.close(fd)
+                presence_src = sqlite3.connect(PRESENCE_DB, timeout=10)
+                presence_dst = sqlite3.connect(temp_presence)
+                try:
+                    presence_src.backup(presence_dst)
+                    presence_dst.commit()
+                finally:
+                    presence_dst.close()
+                    presence_src.close()
+                archive.write(temp_presence, arcname='ario_presence.sqlite3')
+            fd, temp_db = tempfile.mkstemp(prefix='ario_suite_snapshot_', suffix='.sqlite3', dir=BASE_DIR)
+            os.close(fd)
+            src_conn = _suite_connect()
+            dst_conn = sqlite3.connect(temp_db)
+            try:
+                src_conn.backup(dst_conn)
+                dst_conn.commit()
+            finally:
+                dst_conn.close()
+                src_conn.close()
+            archive.write(temp_db, arcname='ario_suite.sqlite3')
+            archive.writestr('BACKUP_INFO.txt', f'ARIO backup\nCreated: {_suite_now_label()}\nType: {safe_label}\n')
+        try:
+            os.chmod(backup_path, 0o600)
+        except OSError:
+            pass
+        # Keep the newest 30 backups; never touch the live data files.
+        backups = sorted(
+            [os.path.join(ARIO_SUITE_BACKUP_DIR, name) for name in os.listdir(ARIO_SUITE_BACKUP_DIR) if name.endswith('.zip')],
+            key=lambda path: os.path.getmtime(path), reverse=True
+        )
+        for stale in backups[30:]:
+            try:
+                os.remove(stale)
+            except OSError:
+                pass
+        return backup_path
+    finally:
+        for temporary_path in (temp_db, temp_presence):
+            if temporary_path and os.path.exists(temporary_path):
+                try:
+                    os.remove(temporary_path)
+                except OSError:
+                    pass
+
+
+def _suite_daily_backup_if_due():
+    _suite_init()
+    today = _school_now().strftime('%Y-%m-%d')
+    conn = _suite_connect()
+    should_create = False
+    try:
+        conn.execute('BEGIN IMMEDIATE')
+        row = conn.execute('SELECT value FROM suite_meta WHERE key=?', ('last_daily_backup',)).fetchone()
+        if not row or row['value'] != today:
+            conn.execute('INSERT OR REPLACE INTO suite_meta(key,value) VALUES(?,?)', ('last_daily_backup', today))
+            should_create = True
+        conn.commit()
+    except Exception:
+        conn.rollback()
+    finally:
+        conn.close()
+    if should_create:
+        try:
+            _suite_make_backup('daily')
+        except Exception:
+            # Do not block public website requests if the host has a read-only or full disk.
+            conn = _suite_connect()
+            try:
+                conn.execute('DELETE FROM suite_meta WHERE key=?', ('last_daily_backup',))
+                conn.commit()
+            finally:
+                conn.close()
+
+
+@app.before_request
+def _ario_suite_prepare_request():
+    if request.path.startswith(('/school', '/parents', '/api/school')):
+        try:
+            _suite_init()
+            _suite_daily_backup_if_due()
+        except Exception:
+            # The existing school site must continue to function if the add-on DB is unavailable.
+            pass
+
+
+# -------------------------------
+# اتاق فرمان مدیر
+# -------------------------------
+@app.route('/school/command-center')
+def ario_suite_command_center():
+    context = _suite_current_context(allow_parent=False)
+    if not context:
+        return redirect(url_for('index'))
+    data, portal, username, role, account = context
+    if not _suite_is_admin(role):
+        abort(403)
+    today_key = _school_now().strftime('%Y-%m-%d')
+    attendance = portal.get('attendance', {}).get(today_key, {})
+    absent = 0
+    pending_absent = 0
+    for class_id, students in attendance.items():
+        for student_name, record in students.items():
+            if isinstance(record, dict) and record.get('status') == 'غایب':
+                absent += 1
+                if record.get('absence_classification') not in ('موجه', 'غیرموجه'):
+                    pending_absent += 1
+    pending_requests = sum(1 for req in portal.get('enrollment_requests', []) if req.get('status') == 'pending')
+    students_count = sum(1 for u in data.get('users', {}).values() if u.get('role') == 'دانش‌آموز')
+    teachers_count = sum(1 for u in data.get('users', {}).values() if u.get('role') == 'معلم')
+    parents_count = sum(1 for u in data.get('users', {}).values() if u.get('role') == 'والد')
+    unread_messages = 0
+    conn = _suite_connect()
+    try:
+        unread_messages = conn.execute('SELECT COUNT(*) FROM suite_message_recipients WHERE recipient=? AND read_at=\'\'', (username,)).fetchone()[0]
+        recent = conn.execute('SELECT actor,action,target,created_at FROM suite_audit_log ORDER BY id DESC LIMIT 8').fetchall()
+    finally:
+        conn.close()
+    recent_html = ''.join(
+        f'<tr><td>{_school_html(row["actor"])}</td><td>{_school_html(row["action"])}</td><td>{_school_html(row["target"])}</td><td>{_school_html(_ario_shamsi_date(row["created_at"]))}</td></tr>'
+        for row in recent
+    ) or '<tr><td colspan="4">هنوز فعالیتی ثبت نشده است.</td></tr>'
+    kpis = [
+        (len(portal.get('classes', {})), 'کلاس‌های مدرسه', 'fa-school'),
+        (students_count, 'دانش‌آموزان', 'fa-user-graduate'),
+        (teachers_count, 'دبیران', 'fa-chalkboard-user'),
+        (parents_count, 'والدین', 'fa-people-roof'),
+        (absent, 'غایبان امروز', 'fa-user-clock'),
+        (pending_absent, 'غیبت در انتظار بررسی', 'fa-hourglass-half'),
+        (pending_requests, 'درخواست‌های ورود', 'fa-user-check'),
+        (unread_messages, 'پیام‌های خوانده‌نشده', 'fa-envelope'),
+    ]
+    kpi_html = ''.join(f'<article class="ario-school-kpi"><strong>{value}</strong><span><i class="fas {icon}"></i> {label}</span></article>' for value, label, icon in kpis)
+    shortcuts = [
+        ('مدیریت کلاس‌ها', '/school', 'fa-school'), ('بررسی غایبان', '/school/attendance-overview', 'fa-user-clock'),
+        ('درخواست‌های ورود', '/school/requests', 'fa-user-check'), ('پرونده‌های دانش‌آموزان', '/school/students', 'fa-id-card'),
+        ('پیام‌رسان', '/school/messages', 'fa-comments'), ('تقویم مدرسه', '/school/calendar', 'fa-calendar-days'),
+        ('گزارش‌های تحلیلی', '/school/reports', 'fa-chart-pie'), ('پشتیبان‌گیری', '/school/backup', 'fa-database'),
+    ]
+    shortcut_html = ''.join(f'<a class="ario-school-card" href="{url}"><div class="ario-school-card-top"><span>ARIO CONTROL</span><i class="fas {icon}"></i></div><h3>{label}</h3><p>ورود مستقیم به این بخش</p></a>' for label, url, icon in shortcuts)
+    content = (
+        '<main class="ario-school-wrap"><section class="ario-school-hero"><span class="ario-school-eyebrow">ARIO 3.0 · COMMAND CENTER</span>'
+        '<h1>اتاق فرمان آریو</h1><p>نمای کلی وضعیت آموزشی، ارتباطات و عملیات روزانه مدرسه در یک صفحه.</p>'
+        f'<div class="ario-school-actions"><span class="ario-school-chip">مدیر: {_school_html(username)}</span><span class="ario-school-chip">{_school_html(_ario_shamsi_date(today_key))}</span></div></section>'
+        f'<section class="ario-school-kpis">{kpi_html}</section><section class="ario-school-section"><div class="ario-school-section-head"><div><h2>دسترسی سریع</h2><p>ابزارهای پرتکرار مدیریت مدرسه</p></div></div><div class="ario-school-grid">{shortcut_html}</div></section>'
+        f'<section class="ario-school-panel"><h3>آخرین فعالیت‌های سامانه</h3><div class="ario-school-table-wrap"><table class="ario-school-table"><thead><tr><th>کاربر</th><th>فعالیت</th><th>بخش</th><th>تاریخ</th></tr></thead><tbody>{recent_html}</tbody></table></div><div class="ario-school-actions"><a class="ario-school-btn" href="/school/audit">مشاهده تاریخچه کامل</a></div></section></main>'
+    )
+    return _suite_page(content, 'اتاق فرمان آریو', 'command')
+
+
+# -------------------------------
+# میزکار دبیران
+# -------------------------------
+@app.route('/school/teacher-workspace')
+def ario_suite_teacher_workspace():
+    context = _suite_current_context(allow_parent=False)
+    if not context:
+        return redirect(url_for('index'))
+    data, portal, username, role, account = context
+    if role not in ('معلم',) and not _suite_is_admin(role):
+        abort(403)
+    if role == 'معلم' and not _school_class_access_approved(account):
+        body = '<div class="ario-school-notice">دسترسی آموزشی حساب شما هنوز توسط مدیر تأیید نشده است. پس از تأیید و تخصیص کلاس‌ها، میزکار دبیر فعال می‌شود.</div>'
+        return _suite_page('<main class="ario-school-wrap"><section class="ario-school-hero"><span class="ario-school-eyebrow">TEACHER WORKSPACE</span><h1>میزکار دبیر</h1><p>مدیریت کلاس‌ها، ارزیابی و فعالیت‌های آموزشی.</p></section>'+body+'</main>', 'میزکار دبیران', 'teachers')
+    class_ids = _suite_visible_class_ids(data, portal, username, role)
+    today = _school_now().strftime('%Y-%m-%d')
+    today_records = portal.get('attendance', {}).get(today, {})
+    cards = []
+    for class_id in class_ids:
+        cls = portal.get('classes', {}).get(class_id, {})
+        students = _school_class_students(data, class_id)
+        absent = sum(1 for name in students if today_records.get(class_id, {}).get(name, {}).get('status') == 'غایب')
+        homework_count = sum(1 for h in portal.get('homework', []) if h.get('class_id') == class_id)
+        exam_count = sum(1 for e in portal.get('exams', []) if e.get('class_id') == class_id)
+        cards.append(
+            f'<article class="ario-parent-child-card"><span class="ario-school-chip">{_school_html(_school_class_label(cls))}</span>'
+            f'<h2>{_school_html(_school_class_label(cls))}</h2><div class="ario-parent-mini-stats">'
+            f'<div><strong>{len(students)}</strong><small>دانش‌آموز</small></div><div><strong>{absent}</strong><small>غایب امروز</small></div>'
+            f'<div><strong>{homework_count}</strong><small>تکلیف</small></div><div><strong>{exam_count}</strong><small>امتحان</small></div></div>'
+            f'<div class="ario-school-actions"><a class="ario-school-btn primary" href="/school/class/{_school_html(class_id)}">ورود به کلاس</a>'
+            f'<a class="ario-school-btn" href="/school/attendance/{_school_html(class_id)}">حضور و غیاب</a>'
+            f'<a class="ario-school-btn" href="/school/grades/{_school_html(class_id)}">دفتر نمره</a>'
+            f'<a class="ario-school-btn" href="/school/homework/{_school_html(class_id)}">تکالیف</a></div></article>'
+        )
+    content = (
+        '<main class="ario-school-wrap"><section class="ario-school-hero"><span class="ario-school-eyebrow">ARIO · TEACHER DESK</span>'
+        '<h1>میزکار دبیر</h1><p>کلاس‌های تخصیص‌یافته و ابزارهای آموزشی را از یک صفحه مدیریت کن.</p>'
+        f'<div class="ario-school-actions"><span class="ario-school-chip">{_school_html(_suite_user_label(data, username))}</span><span class="ario-school-chip">{len(class_ids)} کلاس در دسترس</span></div></section>'
+        f'<section class="ario-parent-children-grid">{"".join(cards) or "<div class=ario-school-empty>هنوز کلاسی به حساب شما تخصیص داده نشده است.</div>"}</section>'
+        '<section class="ario-school-section"><div class="ario-school-section-head"><div><h2>امکانات مشترک</h2><p>ابزارهای ارتباطی و برنامه‌ریزی</p></div></div>'
+        '<div class="ario-school-grid"><a class="ario-school-card" href="/school/messages"><h3>پیام‌رسان</h3><p>ارتباط با مدیر، دانش‌آموزان و والدین کلاس‌ها</p></a>'
+        '<a class="ario-school-card" href="/school/calendar"><h3>تقویم مدرسه</h3><p>رویدادها، امتحانات و برنامه‌های آموزشی</p></a>'
+        '<a class="ario-school-card" href="/school/notifications"><h3>اعلان‌ها</h3><p>پیام‌ها و یادآوری‌های جدید</p></a></div></section></main>'
+    )
+    return _suite_page(content, 'میزکار دبیر', 'teachers')
+
+
+# -------------------------------
+# پیام‌رسان داخلی
+# -------------------------------
+@app.route('/school/messages', methods=['GET', 'POST'])
+def ario_suite_messages():
+    context = _suite_current_context()
+    if not context:
+        return redirect(url_for('index'))
+    data, portal, username, role, account = context
+    token = _school_csrf()
+    allowed = _suite_allowed_direct_recipients(data, portal, username, role)
+    notice = ''
+    error = False
+    if request.method == 'POST':
+        if not _school_valid_csrf():
+            abort(400)
+        action = request.form.get('action', 'send')
+        if action == 'mark_read':
+            message_id = request.form.get('message_id', '')
+            conn = _suite_connect()
+            try:
+                cur = conn.execute('UPDATE suite_message_recipients SET read_at=? WHERE message_id=? AND recipient=?', (_suite_now_label(), message_id, username))
+                conn.commit()
+                notice = 'وضعیت پیام به خوانده‌شده تغییر کرد.' if cur.rowcount else 'پیام موردنظر پیدا نشد.'
+            finally:
+                conn.close()
+        elif action == 'send':
+            target = request.form.get('recipient', '').strip()
+            subject = request.form.get('subject', '').strip()[:120]
+            body = request.form.get('body', '').strip()[:5000]
+            recipients = set()
+            message_kind = 'direct'
+            if target.startswith('class:'):
+                class_id = target.split(':', 1)[1]
+                if class_id not in portal.get('classes', {}):
+                    abort(400)
+                permitted = _suite_is_admin(role) or (role == 'معلم' and _school_class_access_approved(account) and username in portal['classes'][class_id].get('teacher_usernames', []))
+                if not permitted:
+                    abort(403)
+                recipients = _suite_class_recipients(data, portal, class_id)
+                recipients.discard(username)
+                message_kind = 'class'
+            elif target == 'school':
+                if not _suite_is_admin(role):
+                    abort(403)
+                recipients = {name for name, a in data.get('users', {}).items() if name != username and a.get('role') in ('معلم', 'دانش‌آموز', 'والد')}
+                message_kind = 'school'
+            else:
+                if target not in allowed:
+                    abort(403)
+                recipients = {target}
+            if not subject or not body or not recipients:
+                notice = 'گیرنده، موضوع و متن پیام را کامل کن. برای پیام گروهی باید دست‌کم یک گیرنده وجود داشته باشد.'
+                error = True
+            else:
+                message_id = secrets.token_urlsafe(16)
+                conn = _suite_connect()
+                try:
+                    conn.execute('INSERT INTO suite_messages(id,sender,subject,body,created_at,message_kind) VALUES(?,?,?,?,?,?)',
+                                 (message_id, username, subject, body, _suite_now_label(), message_kind))
+                    conn.executemany('INSERT OR IGNORE INTO suite_message_recipients(message_id,recipient) VALUES(?,?)',
+                                     [(message_id, recipient) for recipient in sorted(recipients)])
+                    conn.commit()
+                finally:
+                    conn.close()
+                _suite_notify(recipients, 'پیام جدید از ' + _suite_user_label(data, username), subject, '/school/messages', 'message')
+                _suite_audit(username, 'ارسال پیام', target, f'{len(recipients)} گیرنده')
+                notice = f'پیام با موفقیت برای {len(recipients)} گیرنده ارسال شد.'
+        else:
+            abort(400)
+
+    conn = _suite_connect()
+    try:
+        inbox = conn.execute('''SELECT m.id,m.sender,m.subject,m.body,m.created_at,m.message_kind,r.read_at
+          FROM suite_messages m JOIN suite_message_recipients r ON r.message_id=m.id
+          WHERE r.recipient=? ORDER BY m.created_at DESC LIMIT 80''', (username,)).fetchall()
+        sent = conn.execute('''SELECT m.id,m.subject,m.body,m.created_at,m.message_kind,COUNT(r.id) AS recipient_count
+          FROM suite_messages m LEFT JOIN suite_message_recipients r ON r.message_id=m.id
+          WHERE m.sender=? GROUP BY m.id ORDER BY m.created_at DESC LIMIT 40''', (username,)).fetchall()
+    finally:
+        conn.close()
+
+    recipient_options = ['<option value="">انتخاب گیرنده</option>']
+    for recipient in allowed:
+        recipient_role = data.get('users', {}).get(recipient, {}).get('role', '')
+        recipient_options.append(f'<option value="{_school_html(recipient)}">{_school_html(_suite_user_label(data, recipient))} · {_school_html(recipient_role)}</option>')
+    if _suite_is_admin(role) or (role == 'معلم' and _school_class_access_approved(account)):
+        class_ids = list(portal.get('classes', {})) if _suite_is_admin(role) else _school_teacher_classes(portal, username)
+        for class_id in sorted(class_ids, key=lambda cid: (_school_grade_number(portal['classes'][cid].get('grade_number'), cid), int(cid.split('-')[-1]))):
+            recipient_options.append(f'<option value="class:{_school_html(class_id)}">ارسال گروهی · {_school_html(_school_class_label(portal["classes"][class_id]))}</option>')
+    if _suite_is_admin(role):
+        recipient_options.append('<option value="school">ارسال به همه اعضای مدرسه</option>')
+
+    inbox_cards = []
+    for row in inbox:
+        sender_label = _suite_user_label(data, row['sender'])
+        unread = not row['read_at']
+        mark_form = ''
+        if unread:
+            mark_form = f'<form method="post"><input type="hidden" name="csrf_token" value="{_school_html(token)}"><input type="hidden" name="action" value="mark_read"><input type="hidden" name="message_id" value="{_school_html(row["id"])}"><button class="ario-school-btn" type="submit">علامت‌گذاری به‌عنوان خوانده‌شده</button></form>'
+        inbox_cards.append(
+            f'<article class="ario-school-panel"><div class="ario-school-parent-head"><div><span class="ario-school-chip">{ "خوانده‌نشده" if unread else "خوانده‌شده" }</span>'
+            f'<h3 style="margin-top:9px">{_school_html(row["subject"])}</h3><small>فرستنده: {_school_html(sender_label)} · {_school_html(_ario_shamsi_date(row["created_at"]))}</small></div>'
+            f'<i class="fas fa-envelope-open-text"></i></div><p style="white-space:pre-wrap;line-height:2;color:#c5d7ea;margin-top:12px">{_school_html(row["body"])}</p>{mark_form}</article>'
+        )
+    sent_cards = ''.join(
+        f'<article class="ario-school-panel"><h3>{_school_html(row["subject"])}</h3><p style="white-space:pre-wrap;line-height:2;color:#c5d7ea">{_school_html(row["body"])}</p><small style="color:#9fb8d2">{row["recipient_count"]} گیرنده · {_school_html(_ario_shamsi_date(row["created_at"]))}</small></article>'
+        for row in sent
+    ) or '<div class="ario-school-empty">هنوز پیامی ارسال نکرده‌ای.</div>'
+    notice_html = f'<div class="ario-school-notice" style="{"border-color:rgba(248,113,113,.3);color:#ffc4c4" if error else ""}">{_school_html(notice)}</div>' if notice else ''
+    content = (
+        '<main class="ario-school-wrap"><section class="ario-school-hero"><span class="ario-school-eyebrow">ARIO MESSENGER</span>'
+        '<h1>پیام‌رسان مدرسه</h1><p>ارتباط مستقیم و کنترل‌شده میان مدیر، دبیر، دانش‌آموز و والدین.</p></section>'
+        f'{notice_html}<form method="post" class="ario-school-panel"><input type="hidden" name="csrf_token" value="{_school_html(token)}"><input type="hidden" name="action" value="send"><h3>نوشتن پیام جدید</h3>'
+        f'<div class="ario-school-form-grid"><label class="ario-school-field">گیرنده<select name="recipient" required>{"".join(recipient_options)}</select></label>'
+        '<label class="ario-school-field">موضوع پیام<input name="subject" maxlength="120" required></label>'
+        '<label class="ario-school-field" style="grid-column:1/-1">متن پیام<textarea name="body" maxlength="5000" required placeholder="پیام خود را بنویسید..."></textarea></label></div>'
+        '<div class="ario-school-form-actions"><button class="ario-school-btn primary" type="submit">ارسال پیام</button></div></form>'
+        f'<section class="ario-school-section"><div class="ario-school-section-head"><div><h2>صندوق دریافتی</h2><p>پیام‌هایی که برای شما ارسال شده‌اند</p></div><span class="ario-school-chip">{len(inbox)} پیام</span></div>{"".join(inbox_cards) or "<div class=ario-school-empty>پیامی در صندوق شما نیست.</div>"}</section>'
+        f'<section class="ario-school-section"><div class="ario-school-section-head"><div><h2>ارسال‌شده‌ها</h2><p>سوابق پیام‌های ارسالی شما</p></div></div>{sent_cards}</section></main>'
+    )
+    return _suite_page(content, 'پیام‌رسان مدرسه', 'messages')
+
+
+# -------------------------------
+# تقویم شمسی مدرسه
+# -------------------------------
+@app.route('/school/calendar', methods=['GET', 'POST'])
+def ario_suite_calendar():
+    context = _suite_current_context()
+    if not context:
+        return redirect(url_for('index'))
+    data, portal, username, role, account = context
+    token = _school_csrf()
+    notice = ''
+    can_create = _suite_is_admin(role) or (role == 'معلم' and _school_class_access_approved(account))
+    visible_classes = _suite_visible_class_ids(data, portal, username, role)
+    if request.method == 'POST':
+        if not _school_valid_csrf():
+            abort(400)
+        if not can_create:
+            abort(403)
+        title = request.form.get('title', '').strip()[:120]
+        body = request.form.get('body', '').strip()[:2000]
+        date_raw = request.form.get('event_date', '').strip()
+        date_iso = _ario_parse_school_date(date_raw, default=None)
+        start_time = request.form.get('start_time', '').strip()
+        event_type = request.form.get('event_type', 'مدرسه').strip()
+        class_id = request.form.get('class_id', '').strip()
+        if event_type not in ('امتحان', 'جلسه', 'فعالیت', 'تعطیلی', 'مدرسه'):
+            event_type = 'مدرسه'
+        if role == 'معلم' and class_id not in visible_classes:
+            abort(403)
+        if not _suite_is_admin(role) and not class_id:
+            abort(403)
+        if class_id and class_id not in portal.get('classes', {}):
+            abort(400)
+        if not title or not date_iso:
+            notice = 'عنوان و تاریخ شمسی معتبر لازم است. نمونه تاریخ: ۱۴۰۵/۰۸/۳۰'
+        else:
+            event_id = secrets.token_urlsafe(14)
+            conn = _suite_connect()
+            try:
+                conn.execute('INSERT INTO suite_calendar_events(id,title,body,event_date,start_time,event_type,class_id,created_by,created_at) VALUES(?,?,?,?,?,?,?,?,?)',
+                             (event_id, title, body, date_iso, start_time[:5], event_type, class_id, username, _suite_now_label()))
+                conn.commit()
+            finally:
+                conn.close()
+            if class_id:
+                recipients = _suite_class_recipients(data, portal, class_id)
+                target_label = _school_class_label(portal['classes'][class_id])
+            else:
+                recipients = {name for name, a in data.get('users', {}).items() if a.get('role') in ('معلم', 'دانش‌آموز', 'والد')}
+                target_label = 'کل مدرسه'
+            recipients.discard(username)
+            _suite_notify(recipients, 'رویداد جدید در تقویم', f'{title} · {target_label} · {_ario_shamsi_date(date_iso)}', '/school/calendar', 'calendar')
+            _suite_audit(username, 'ثبت رویداد تقویم', class_id or 'کل مدرسه', title)
+            notice = 'رویداد با موفقیت به تقویم اضافه شد و برای افراد مرتبط اعلان ارسال شد.'
+
+    conn = _suite_connect()
+    try:
+        raw_events = conn.execute('SELECT * FROM suite_calendar_events ORDER BY event_date ASC,start_time ASC,created_at DESC LIMIT 300').fetchall()
+    finally:
+        conn.close()
+    allowed_classes = set(visible_classes)
+    events = [dict(row) for row in raw_events if not row['class_id'] or row['class_id'] in allowed_classes]
+    today_iso = _school_now().strftime('%Y-%m-%d')
+    event_cards = []
+    for item in events:
+        past = item['event_date'] < today_iso
+        class_label = _school_class_label(portal['classes'][item['class_id']]) if item['class_id'] in portal.get('classes', {}) else 'کل مدرسه'
+        event_cards.append(
+            f'<article class="ario-school-panel"><div class="ario-school-parent-head"><div><span class="ario-school-chip">{_school_html(item["event_type"])} · {_school_html(class_label)}</span>'
+            f'<h3 style="margin-top:10px">{_school_html(item["title"])}</h3><small style="color:#9fb8d2">{_school_html(_ario_shamsi_date(item["event_date"]))} {("· " + _school_html(item["start_time"])) if item["start_time"] else ""}</small></div>'
+            f'<i class="fas {"fa-calendar-check" if not past else "fa-calendar"}"></i></div><p style="white-space:pre-wrap;color:#c5d7ea;line-height:2;margin-top:10px">{_school_html(item["body"])}</p>'
+            f'<small style="color:#91b0d0">ثبت‌کننده: {_school_html(_suite_user_label(data,item["created_by"]))}</small></article>'
+        )
+    class_options = '<option value="">کل مدرسه</option>' if _suite_is_admin(role) else '<option value="">انتخاب کلاس</option>'
+    for cid in visible_classes:
+        cls = portal['classes'][cid]
+        class_options += f'<option value="{_school_html(cid)}">{_school_html(_school_class_label(cls))}</option>'
+    form = ''
+    if can_create:
+        form = (
+            f'<form method="post" class="ario-school-panel"><input type="hidden" name="csrf_token" value="{_school_html(token)}"><h3>افزودن رویداد به تقویم</h3>'
+            '<div class="ario-school-form-grid"><label class="ario-school-field">عنوان رویداد<input name="title" required maxlength="120"></label>'
+            '<label class="ario-school-field">تاریخ شمسی<input name="event_date" inputmode="numeric" placeholder="۱۴۰۵/۰۸/۳۰" required></label>'
+            '<label class="ario-school-field">ساعت (اختیاری)<input name="start_time" type="time"></label>'
+            '<label class="ario-school-field">نوع رویداد<select name="event_type"><option>مدرسه</option><option>امتحان</option><option>جلسه</option><option>فعالیت</option><option>تعطیلی</option></select></label>'
+            f'<label class="ario-school-field">مخاطب / کلاس<select name="class_id">{class_options}</select></label>'
+            '<label class="ario-school-field" style="grid-column:1/-1">توضیحات<textarea name="body" maxlength="2000"></textarea></label></div>'
+            '<div class="ario-school-form-actions"><button class="ario-school-btn primary" type="submit">ثبت در تقویم</button></div></form>'
+        )
+    notice_html = f'<div class="ario-school-notice">{_school_html(notice)}</div>' if notice else ''
+    content = (
+        '<main class="ario-school-wrap"><section class="ario-school-hero"><span class="ario-school-eyebrow">ARIO SHAMSI CALENDAR</span>'
+        '<h1>تقویم هوشمند مدرسه</h1><p>امتحان‌ها، جلسات، فعالیت‌ها و رویدادهای آموزشی با تاریخ شمسی.</p></section>'
+        f'{notice_html}{form}<section class="ario-school-section"><div class="ario-school-section-head"><div><h2>رویدادهای مدرسه</h2><p>رویدادهای عمومی و کلاس‌های مرتبط با حساب شما</p></div><span class="ario-school-chip">{len(events)} رویداد</span></div>'
+        f'{"".join(event_cards) or "<div class=ario-school-empty>هنوز رویدادی در تقویم ثبت نشده است.</div>"}</section></main>'
+    )
+    return _suite_page(content, 'تقویم مدرسه', 'calendar')
+
+
+# -------------------------------
+# اعلان‌ها و API اعلان زنده
+# -------------------------------
+@app.route('/school/notifications', methods=['GET', 'POST'])
+def ario_suite_notifications():
+    context = _suite_current_context()
+    if not context:
+        return redirect(url_for('index'))
+    data, portal, username, role, account = context
+    token = _school_csrf()
+    if request.method == 'POST':
+        if not _school_valid_csrf():
+            abort(400)
+        action = request.form.get('action', '')
+        conn = _suite_connect()
+        try:
+            if action == 'mark_all':
+                conn.execute('UPDATE suite_notifications SET read_at=? WHERE recipient=? AND read_at=\'\'', (_suite_now_label(), username))
+                conn.commit()
+                _suite_audit(username, 'خواندن همه اعلان‌ها', 'اعلان‌ها', '')
+            elif action == 'mark_one':
+                notification_id = request.form.get('notification_id', '')
+                conn.execute('UPDATE suite_notifications SET read_at=? WHERE id=? AND recipient=?', (_suite_now_label(), notification_id, username))
+                conn.commit()
+            else:
+                abort(400)
+        finally:
+            conn.close()
+        return redirect(url_for('ario_suite_notifications'))
+    conn = _suite_connect()
+    try:
+        notifications = conn.execute('SELECT * FROM suite_notifications WHERE recipient=? ORDER BY created_at DESC LIMIT 100', (username,)).fetchall()
+    finally:
+        conn.close()
+    cards = []
+    for item in notifications:
+        unread = not item['read_at']
+        mark_form = ''
+        if unread:
+            mark_form = ('<form method="post"><input type="hidden" name="csrf_token" value="' + _school_html(token) + '">' +
+                         '<input type="hidden" name="action" value="mark_one"><input type="hidden" name="notification_id" value="' +
+                         _school_html(item['id']) + '"><button class="ario-school-btn" type="submit">علامت‌گذاری به‌عنوان خوانده‌شده</button></form>')
+        cards.append(
+            f'<article class="ario-school-panel"><div class="ario-school-parent-head"><div><span class="ario-school-chip">{ "جدید" if unread else "دیده‌شده" }</span>'
+            f'<h3 style="margin-top:9px">{_school_html(item["title"])}</h3><small style="color:#9fb8d2">{_school_html(_ario_shamsi_date(item["created_at"]))}</small></div><i class="fas fa-bell"></i></div>'
+            f'<p style="white-space:pre-wrap;line-height:2;color:#c5d7ea;margin-top:9px">{_school_html(item["body"])}</p>'
+            f'<div class="ario-school-actions"><a class="ario-school-btn" href="{_school_html(item["target_url"])}">مشاهده مرتبط</a>{mark_form}</div></article>'
+        )
+    unread_count = sum(1 for row in notifications if not row['read_at'])
+    push_script = r'''<script>
+    (function(){
+      const button=document.querySelector('[data-ario-enable-notifications]');
+      if(button){button.addEventListener('click',async function(){
+        if(!('Notification' in window)){button.textContent='اعلان مرورگر پشتیبانی نمی‌شود';return;}
+        const permission=await Notification.requestPermission();
+        button.textContent=permission==='granted'?'اعلان مرورگر فعال شد':'اجازه اعلان داده نشد';
+      });}
+      let lastSeen='';
+      async function poll(){
+        try{
+          const response=await fetch('/api/school/notifications',{credentials:'same-origin',cache:'no-store'});
+          if(!response.ok)return;
+          const data=await response.json();
+          const badge=document.querySelector('.ario-suite-badge');
+          if(data.unread>0){if(badge){badge.textContent=data.unread;} }
+          if(data.latest && data.latest.id && data.latest.id!==lastSeen){
+            if(lastSeen && 'Notification' in window && Notification.permission==='granted'){
+              const n=data.latest;
+              if('serviceWorker' in navigator){navigator.serviceWorker.ready.then(reg=>reg.showNotification(n.title,{body:n.body,icon:'/ario-pwa-icon-192.png',tag:n.id})).catch(()=>new Notification(n.title,{body:n.body}));}
+              else new Notification(n.title,{body:n.body});
+            }
+            lastSeen=data.latest.id;
+          }
+        }catch(e){}
+      }
+      poll();setInterval(poll,35000);
+    })();
+    </script>'''
+    content = (
+        '<main class="ario-school-wrap"><section class="ario-school-hero"><span class="ario-school-eyebrow">ARIO NOTIFICATION CENTER</span>'
+        '<h1>اعلان‌های من</h1><p>پیام‌های جدید، رویدادهای تقویم و یادآوری‌های مرتبط با حساب شما.</p>'
+        f'<div class="ario-school-actions"><span class="ario-school-chip">{unread_count} اعلان خوانده‌نشده</span><button type="button" class="ario-school-btn" data-ario-enable-notifications>فعال‌سازی اعلان مرورگر</button></div></section>'
+        f'<form method="post" class="ario-school-actions"><input type="hidden" name="csrf_token" value="{_school_html(token)}"><input type="hidden" name="action" value="mark_all"><button class="ario-school-btn primary" type="submit" {"disabled" if not unread_count else ""}>خواندن همه اعلان‌ها</button></form>'
+        f'{"".join(cards) or "<div class=ario-school-empty>اعلانی برای نمایش وجود ندارد.</div>"}</main>{push_script}'
+    )
+    return _suite_page(content, 'اعلان‌های من', 'notifications')
+
+
+@app.route('/api/school/notifications')
+def ario_suite_notifications_api():
+    if not session.get('username'):
+        return Response(json.dumps({'success': False}, ensure_ascii=False), status=401, mimetype='application/json', headers={'Cache-Control': 'no-store'})
+    username = session.get('username')
+    _suite_init()
+    conn = _suite_connect()
+    try:
+        unread = conn.execute('SELECT COUNT(*) FROM suite_notifications WHERE recipient=? AND read_at=\'\'', (username,)).fetchone()[0]
+        latest = conn.execute('SELECT id,title,body,created_at FROM suite_notifications WHERE recipient=? ORDER BY created_at DESC LIMIT 1', (username,)).fetchone()
+    finally:
+        conn.close()
+    return Response(json.dumps({'success': True, 'unread': int(unread), 'latest': dict(latest) if latest else None}, ensure_ascii=False), mimetype='application/json', headers={'Cache-Control': 'no-store'})
+
+
+# -------------------------------
+# فهرست دانش‌آموزان و پرونده یکپارچه
+# -------------------------------
+@app.route('/school/students')
+def ario_suite_student_directory():
+    context = _suite_current_context(allow_parent=False)
+    if not context:
+        return redirect(url_for('index'))
+    data, portal, username, role, account = context
+    if role not in ('معلم',) and not _suite_is_admin(role):
+        abort(403)
+    visible_classes = set(_suite_visible_class_ids(data, portal, username, role))
+    students = []
+    for student_username, student in data.get('users', {}).items():
+        class_id = student.get('school_class_id')
+        if student.get('role') != 'دانش‌آموز' or class_id not in visible_classes:
+            continue
+        cls = portal.get('classes', {}).get(class_id, {})
+        full_name = student.get('full_name') or student_username
+        students.append((student_username, full_name, _school_class_label(cls), class_id))
+    students.sort(key=lambda row: (row[2], row[1].casefold()))
+    rows = ''.join(
+        f'<tr data-student-search="{_school_html(name + " " + username_value + " " + class_label)}"><td>{_school_html(name)}</td><td>{_school_html(username_value)}</td><td>{_school_html(class_label)}</td><td><a class="ario-school-btn" href="/school/student/{_school_html(username_value)}">پرونده دانش‌آموز</a></td></tr>'
+        for username_value, name, class_label, class_id in students
+    ) or '<tr><td colspan="4">دانش‌آموزی در کلاس‌های در دسترس شما ثبت نشده است.</td></tr>'
+    content = (
+        '<main class="ario-school-wrap"><section class="ario-school-hero"><span class="ario-school-eyebrow">STUDENT DIRECTORY</span>'
+        '<h1>پرونده‌های دانش‌آموزان</h1><p>فهرست فقط شامل دانش‌آموزان کلاس‌هایی است که به نقش شما دسترسی دارند.</p>'
+        f'<div class="ario-school-actions"><span class="ario-school-chip">{len(students)} دانش‌آموز</span></div></section>'
+        '<section class="ario-school-panel"><label class="ario-school-field">جست‌وجوی نام، نام کاربری یا کلاس<input type="search" id="arioStudentDirectorySearch" placeholder="نام دانش‌آموز یا کلاس..."></label>'
+        f'<div class="ario-school-table-wrap" style="margin-top:14px"><table class="ario-school-table"><thead><tr><th>نام</th><th>نام کاربری</th><th>کلاس</th><th>پرونده</th></tr></thead><tbody id="arioStudentDirectoryRows">{rows}</tbody></table></div></section>'
+        '''<script>(function(){const i=document.getElementById('arioStudentDirectorySearch');const rows=[...document.querySelectorAll('#arioStudentDirectoryRows tr[data-student-search]')];if(i)i.addEventListener('input',()=>{const q=i.value.toLowerCase().replace(/[يى]/g,'ی').replace(/ك/g,'ک').trim();rows.forEach(r=>r.hidden=!r.dataset.studentSearch.toLowerCase().replace(/[يى]/g,'ی').replace(/ك/g,'ک').includes(q));});})();</script></main>'''
+    )
+    return _suite_page(content, 'پرونده‌های دانش‌آموزان', 'students')
+
+
+def _suite_student_access_or_403(data, portal, student_username):
+    if not _suite_can_view_student(data, portal, student_username):
+        abort(403)
+    student = data.get('users', {}).get(student_username, {})
+    if student.get('role') != 'دانش‌آموز':
+        abort(404)
+    return student
+
+
+@app.route('/school/student/<student_username>')
+def ario_suite_student_profile(student_username):
+    context = _suite_current_context()
+    if not context:
+        return redirect(url_for('index'))
+    data, portal, username, role, account = context
+    student = _suite_student_access_or_403(data, portal, student_username)
+    class_id = student.get('school_class_id')
+    cls = portal.get('classes', {}).get(class_id, {}) if class_id else {}
+    academic = _suite_current_student_academic(data, portal, student_username)
+    if academic:
+        attendance_counts = academic['attendance_counts']
+        average = academic['grade_average']
+        homework_pending = sum(1 for item in academic['homework'] if not item['submitted'])
+        exam_pending = sum(1 for item in academic['exams'] if not item['attempted'])
+        attendance_html = ''.join(f'<tr><td>{_school_html(_ario_shamsi_date(item["date"]))}</td><td>{_school_html(item["status"])}</td><td>{_school_html(item["source"])}</td></tr>' for item in academic['attendance'][:10]) or '<tr><td colspan="3">سابقه‌ای ثبت نشده است.</td></tr>'
+        grade_html = ''.join(f'<tr><td>{_school_html(_ario_shamsi_date(item.get("date")))}</td><td>{_school_html(item.get("subject"))}</td><td>{_school_html(item.get("title"))}</td><td>{_school_html(item.get("score"))} از ۲۰</td></tr>' for item in academic['grades'][:10]) or '<tr><td colspan="4">نمره‌ای ثبت نشده است.</td></tr>'
+    else:
+        attendance_counts = {'حاضر':0,'غایب':0,'تأخیر':0,'موجه':0}
+        average = None
+        homework_pending = exam_pending = 0
+        attendance_html = '<tr><td colspan="3">تا زمان تأیید و تخصیص کلاس، سابقه‌ای برای نمایش وجود ندارد.</td></tr>'
+        grade_html = '<tr><td colspan="4">هنوز نمره‌ای ثبت نشده است.</td></tr>'
+    status_text = student.get('class_access_status', 'فعال')
+    class_label = _school_class_label(cls) if cls else 'هنوز کلاسی تعیین نشده است'
+    kpis = [(attendance_counts['حاضر'],'حضور ثبت‌شده'),(attendance_counts['غایب'],'غیبت'),(f'{average:.2f}' if average is not None else '—','میانگین نمرات'),(homework_pending,'تکلیف باقی‌مانده'),(exam_pending,'امتحان شرکت‌نکرده')]
+    kpi_html = ''.join(f'<article class="ario-school-kpi"><strong>{_school_html(value)}</strong><span>{_school_html(label)}</span></article>' for value,label in kpis)
+    profile_actions = ''
+    if _suite_is_admin(role) or role == 'معلم':
+        profile_actions = f'<a class="ario-school-btn" href="/school/messages?to={_school_html(student_username)}">ارسال پیام</a>'
+    content = (
+        '<main class="ario-school-wrap"><a class="ario-school-back" href="/school/students">بازگشت به فهرست دانش‌آموزان</a>'
+        '<section class="ario-school-hero"><span class="ario-school-eyebrow">UNIFIED STUDENT PROFILE</span>'
+        f'<h1>{_school_html(student.get("full_name") or student_username)}</h1><p>نام کاربری: {_school_html(student_username)} · {_school_html(class_label)}</p>'
+        f'<div class="ario-school-actions"><span class="ario-school-chip">وضعیت دسترسی: {_school_html(status_text)}</span>{profile_actions}<a class="ario-school-btn primary" href="/school/report-card/{_school_html(student_username)}">مشاهده کارنامه</a></div></section>'
+        f'<section class="ario-school-kpis">{kpi_html}</section>'
+        f'<section class="ario-school-panel"><h3>آخرین سوابق حضور و غیاب</h3><div class="ario-school-table-wrap"><table class="ario-school-table"><thead><tr><th>تاریخ</th><th>وضعیت</th><th>منبع</th></tr></thead><tbody>{attendance_html}</tbody></table></div></section>'
+        f'<section class="ario-school-panel"><h3>آخرین نمرات</h3><div class="ario-school-table-wrap"><table class="ario-school-table"><thead><tr><th>تاریخ</th><th>درس</th><th>ارزیابی</th><th>نمره</th></tr></thead><tbody>{grade_html}</tbody></table></div></section>'
+        '</main>'
+    )
+    response = _suite_page(content, 'پرونده دانش‌آموز', 'students' if role in ('معلم',) or _suite_is_admin(role) else 'report')
+    response.headers['Cache-Control'] = 'no-store, private'
+    return response
+
+
+@app.route('/school/report-card/<student_username>')
+def ario_suite_report_card(student_username):
+    context = _suite_current_context()
+    if not context:
+        return redirect(url_for('index'))
+    data, portal, username, role, account = context
+    student = _suite_student_access_or_403(data, portal, student_username)
+    class_id = student.get('school_class_id')
+    cls = portal.get('classes', {}).get(class_id, {}) if class_id else {}
+    if not cls:
+        return _suite_page('<main class="ario-school-wrap"><section class="ario-school-hero"><h1>کارنامه</h1><p>پس از تأیید دسترسی کلاس، کارنامه در این صفحه نمایش داده می‌شود.</p></section></main>', 'کارنامه', 'report')
+    grouped = {}
+    all_scores = []
+    rows = []
+    for record in portal.get('grades', []):
+        if record.get('class_id') != class_id or student_username not in record.get('scores', {}):
+            continue
+        score = record.get('scores', {}).get(student_username)
+        try:
+            number = float(score)
+        except (TypeError, ValueError):
+            continue
+        all_scores.append(number)
+        subject = str(record.get('subject', 'بدون درس'))
+        grouped.setdefault(subject, []).append(number)
+        rows.append((record.get('date',''), subject, record.get('title',''), number))
+    overall = round(sum(all_scores)/len(all_scores), 2) if all_scores else None
+    subject_rows = []
+    for subject, scores in sorted(grouped.items()):
+        avg = sum(scores)/len(scores)
+        subject_rows.append(f'<tr><td>{_school_html(subject)}</td><td>{len(scores)}</td><td>{avg:.2f} از ۲۰</td><td>{"عالی" if avg>=18 else "خوب" if avg>=15 else "نیازمند تمرین" if avg>=12 else "نیازمند پیگیری"}</td></tr>')
+    detail_rows = ''.join(f'<tr><td>{_school_html(_ario_shamsi_date(date))}</td><td>{_school_html(subject)}</td><td>{_school_html(title)}</td><td>{score:g} از ۲۰</td></tr>' for date,subject,title,score in sorted(rows,key=lambda r:_ario_parse_school_date(r[0],default='0000-00-00'),reverse=True)) or '<tr><td colspan="4">هنوز نمره‌ای ثبت نشده است.</td></tr>'
+    academic = _suite_current_student_academic(data, portal, student_username)
+    counts = academic['attendance_counts'] if academic else {'حاضر':0,'غایب':0,'تأخیر':0,'موجه':0}
+    exams = [a for a in portal.get('exam_attempts', []) if a.get('student') == student_username]
+    exam_average = None
+    exam_scores = []
+    for attempt in exams:
+        try: exam_scores.append(float(attempt.get('score_20')))
+        except (TypeError,ValueError): pass
+    if exam_scores: exam_average = round(sum(exam_scores)/len(exam_scores),2)
+    content = (
+        '<main class="ario-school-wrap"><section class="ario-school-hero"><span class="ario-school-eyebrow">ARIO ACADEMIC REPORT</span>'
+        f'<h1>کارنامه آموزشی · {_school_html(student.get("full_name") or student_username)}</h1><p>{_school_html(_school_class_label(cls))} · گزارش بر اساس نمرات ثبت‌شده در سامانه؛ برای چاپ می‌توانی از گزینه چاپ مرورگر استفاده کنی.</p>'
+        '<div class="ario-school-actions"><button class="ario-school-btn primary" type="button" onclick="window.print()">چاپ / ذخیره PDF</button><a class="ario-school-btn" href="/school/student/'+_school_html(student_username)+'">پرونده دانش‌آموز</a></div></section>'
+        f'<section class="ario-school-kpis"><article class="ario-school-kpi"><strong>{overall if overall is not None else "—"}</strong><span>میانگین ارزیابی‌ها از ۲۰</span></article>'
+        f'<article class="ario-school-kpi"><strong>{exam_average if exam_average is not None else "—"}</strong><span>میانگین امتحانات آنلاین از ۲۰</span></article>'
+        f'<article class="ario-school-kpi"><strong>{counts["حاضر"]}</strong><span>حضور ثبت‌شده</span></article><article class="ario-school-kpi"><strong>{counts["غایب"]}</strong><span>غیبت ثبت‌شده</span></article></section>'
+        f'<section class="ario-school-panel"><h3>میانگین هر درس</h3><div class="ario-school-table-wrap"><table class="ario-school-table"><thead><tr><th>درس</th><th>تعداد ارزیابی</th><th>میانگین</th><th>وضعیت</th></tr></thead><tbody>{"".join(subject_rows) or "<tr><td colspan=4>نمره‌ای برای محاسبه وجود ندارد.</td></tr>"}</tbody></table></div></section>'
+        f'<section class="ario-school-panel"><h3>جزئیات ارزیابی‌ها</h3><div class="ario-school-table-wrap"><table class="ario-school-table"><thead><tr><th>تاریخ</th><th>درس</th><th>عنوان</th><th>نمره</th></tr></thead><tbody>{detail_rows}</tbody></table></div></section>'
+        '<p style="color:#9fb8d2;font-size:.75rem;line-height:1.9">این کارنامه فقط بر اساس ارزیابی‌هایی محاسبه شده که در دفتر نمرهٔ سامانه ثبت شده‌اند؛ وزن یا ضریب درس‌ها در داده‌های فعلی تعریف نشده است، بنابراین میانگین ساده نمایش داده می‌شود.</p></main>'
+    )
+    response = _suite_page(content, 'کارنامه آموزشی', 'report')
+    response.headers['Cache-Control'] = 'no-store, private'
+    return response
+
+
+# -------------------------------
+# گزارش‌های تحلیلی مدیر و خروجی CSV
+# -------------------------------
+def _suite_school_report_rows(data, portal):
+    today = _school_now().strftime('%Y-%m-%d')
+    today_attendance = portal.get('attendance', {}).get(today, {})
+    result = []
+    for grade_number, grade_name, section_count in SCHOOL_GRADE_CONFIG:
+        for section in range(1, section_count + 1):
+            class_id = f'{grade_number}-{section}'
+            cls = portal.get('classes', {}).get(class_id, {})
+            if not cls:
+                continue
+            students = _school_class_students(data, class_id)
+            grades = []
+            student_score_values = {}
+            for record in portal.get('grades', []):
+                if record.get('class_id') != class_id:
+                    continue
+                for student_name, score in record.get('scores', {}).items():
+                    try:
+                        value = float(score)
+                        grades.append(value)
+                        student_score_values.setdefault(student_name, []).append(value)
+                    except (TypeError, ValueError):
+                        pass
+            absent_today = sum(1 for student_name in students if today_attendance.get(class_id, {}).get(student_name, {}).get('status') == 'غایب')
+            pending_today = sum(1 for student_name in students if today_attendance.get(class_id, {}).get(student_name, {}).get('status') == 'غایب' and today_attendance.get(class_id, {}).get(student_name, {}).get('absence_classification') not in ('موجه','غیرموجه'))
+            average = round(sum(grades)/len(grades), 2) if grades else None
+            result.append({'class_id':class_id,'label':_school_class_label(cls),'students':len(students),'teachers':len(cls.get('teacher_usernames',[])),'absent_today':absent_today,'pending_absence':pending_today,'grade_average':average,'evaluations':len(grades),'student_averages':student_score_values})
+    return result
+
+
+@app.route('/school/reports')
+def ario_suite_reports():
+    context = _suite_current_context(allow_parent=False)
+    if not context:
+        return redirect(url_for('index'))
+    data, portal, username, role, account = context
+    if not _suite_is_admin(role):
+        abort(403)
+    stats = _suite_school_report_rows(data, portal)
+    rows = ''.join(
+        f'<tr><td>{_school_html(item["label"])}</td><td>{item["students"]}</td><td>{item["teachers"]}</td><td>{item["absent_today"]}</td><td>{item["pending_absence"]}</td><td>{item["grade_average"] if item["grade_average"] is not None else "—"}</td><td>{item["evaluations"]}</td></tr>'
+        for item in stats
+    )
+    low_students = []
+    for item in stats:
+        for student_username, values in item['student_averages'].items():
+            if values:
+                avg = sum(values)/len(values)
+                if avg < 12:
+                    low_students.append((student_username, avg, item['label']))
+    low_students.sort(key=lambda row: row[1])
+    low_html = ''.join(f'<tr><td>{_school_html(_suite_user_label(data,name))}</td><td>{_school_html(class_label)}</td><td>{avg:.2f} از ۲۰</td></tr>' for name,avg,class_label in low_students[:30]) or '<tr><td colspan="3">در داده‌های فعلی موردی برای پیگیری تحصیلی زیر میانگین ۱۲ ثبت نشده است.</td></tr>'
+    content = (
+        '<main class="ario-school-wrap"><section class="ario-school-hero"><span class="ario-school-eyebrow">ARIO SCHOOL ANALYTICS</span>'
+        '<h1>گزارش‌های تحلیلی مدرسه</h1><p>مقایسه کلاس‌ها، وضعیت غیبت‌ها و میانگین ارزیابی‌های ثبت‌شده.</p>'
+        '<div class="ario-school-actions"><a class="ario-school-btn primary" href="/school/reports/export.csv">دانلود گزارش Excel (CSV)</a><a class="ario-school-btn" href="/school/command-center">بازگشت به اتاق فرمان</a></div></section>'
+        f'<section class="ario-school-panel"><h3>مقایسه عملکرد کلاس‌ها</h3><div class="ario-school-table-wrap"><table class="ario-school-table"><thead><tr><th>کلاس</th><th>دانش‌آموز</th><th>دبیر</th><th>غایب امروز</th><th>در انتظار بررسی</th><th>میانگین ارزیابی</th><th>تعداد نمره</th></tr></thead><tbody>{rows}</tbody></table></div></section>'
+        f'<section class="ario-school-panel"><h3>دانش‌آموزان نیازمند توجه آموزشی</h3><p style="color:#a9bfd8;line-height:2">این فهرست فقط یک شاخص کمکی بر اساس میانگین سادهٔ نمرات ثبت‌شده زیر ۱۲ است و جایگزین قضاوت دبیر یا بررسی شرایط دانش‌آموز نیست.</p>'
+        f'<div class="ario-school-table-wrap"><table class="ario-school-table"><thead><tr><th>دانش‌آموز</th><th>کلاس</th><th>میانگین</th></tr></thead><tbody>{low_html}</tbody></table></div></section></main>'
+    )
+    return _suite_page(content, 'گزارش‌های تحلیلی', 'reports')
+
+
+@app.route('/school/reports/export.csv')
+def ario_suite_reports_export():
+    context = _suite_current_context(allow_parent=False)
+    if not context:
+        return redirect(url_for('index'))
+    data, portal, username, role, account = context
+    if not _suite_is_admin(role):
+        abort(403)
+    rows = [['کلاس','تعداد دانش‌آموز','تعداد دبیر','غایب امروز','غیبت در انتظار بررسی','میانگین ارزیابی از ۲۰','تعداد نمره']]
+    for item in _suite_school_report_rows(data, portal):
+        rows.append([item['label'],item['students'],item['teachers'],item['absent_today'],item['pending_absence'],item['grade_average'] if item['grade_average'] is not None else '',item['evaluations']])
+    _suite_audit(username, 'دریافت خروجی گزارش مدرسه', 'گزارش‌ها', 'CSV')
+    return _suite_write_csv_response(rows, 'ario_school_report.csv')
+
+
+# -------------------------------
+# تاریخچه فعالیت مدیران
+# -------------------------------
+@app.route('/school/audit')
+def ario_suite_audit_page():
+    context = _suite_current_context(allow_parent=False)
+    if not context:
+        return redirect(url_for('index'))
+    data, portal, username, role, account = context
+    if not _suite_is_admin(role):
+        abort(403)
+    conn = _suite_connect()
+    try:
+        logs = conn.execute('SELECT actor,action,target,details,created_at FROM suite_audit_log ORDER BY id DESC LIMIT 300').fetchall()
+    finally:
+        conn.close()
+    rows = ''.join(f'<tr><td>{_school_html(_suite_user_label(data,row["actor"]))}</td><td>{_school_html(row["action"])}</td><td>{_school_html(row["target"])}</td><td>{_school_html(row["details"])}</td><td>{_school_html(_ario_shamsi_date(row["created_at"]))}</td></tr>' for row in logs) or '<tr><td colspan="5">هنوز رویدادی ثبت نشده است.</td></tr>'
+    content = (
+        '<main class="ario-school-wrap"><section class="ario-school-hero"><span class="ario-school-eyebrow">SECURITY & AUDIT</span>'
+        '<h1>تاریخچه فعالیت سامانه</h1><p>ثبت خلاصهٔ تغییرات، پیام‌ها، رویدادها، پشتیبان‌گیری و عملیات مدیریتی.</p></section>'
+        f'<section class="ario-school-panel"><div class="ario-school-table-wrap"><table class="ario-school-table"><thead><tr><th>کاربر</th><th>فعالیت</th><th>بخش</th><th>جزئیات</th><th>تاریخ</th></tr></thead><tbody>{rows}</tbody></table></div></section></main>'
+    )
+    return _suite_page(content, 'تاریخچه فعالیت', 'audit')
+
+
+# -------------------------------
+# پشتیبان‌گیری روزانه، دستی و بازیابی
+# -------------------------------
+@app.route('/school/backup', methods=['GET', 'POST'])
+def ario_suite_backup_manager():
+    context = _suite_current_context(allow_parent=False)
+    if not context:
+        return redirect(url_for('index'))
+    data, portal, username, role, account = context
+    if not _suite_is_admin(role):
+        abort(403)
+    token = _school_csrf()
+    notice = ''
+    if request.method == 'POST':
+        if not _school_valid_csrf():
+            abort(400)
+        action = request.form.get('action', '')
+        if action == 'create':
+            path = _suite_make_backup('manual')
+            _suite_audit(username, 'ایجاد پشتیبان دستی', os.path.basename(path), '')
+            notice = 'نسخه پشتیبان جدید ساخته شد.'
+        elif action == 'restore':
+            filename = request.form.get('filename', '')
+            safe_name = os.path.basename(filename)
+            if safe_name != filename or not safe_name.endswith('.zip'):
+                abort(400)
+            backup_path = os.path.join(ARIO_SUITE_BACKUP_DIR, safe_name)
+            if not os.path.isfile(backup_path):
+                abort(404)
+            staged_data = None
+            staged_db = None
+            staged_presence = None
+            try:
+                with zipfile.ZipFile(backup_path, 'r') as archive:
+                    names = set(archive.namelist())
+                    if 'school_data.json' not in names:
+                        raise ValueError('missing data file')
+                    restored_data = json.loads(archive.read('school_data.json').decode('utf-8'))
+                    if not isinstance(restored_data, dict) or not isinstance(restored_data.get('users'), dict):
+                        raise ValueError('invalid data file')
+                    # Validate and stage the new SQLite databases before replacing anything live.
+                    if 'ario_suite.sqlite3' in names:
+                        fd, staged_db = tempfile.mkstemp(prefix='restore_suite_', suffix='.sqlite3', dir=BASE_DIR)
+                        with os.fdopen(fd, 'wb') as out:
+                            out.write(archive.read('ario_suite.sqlite3'))
+                            out.flush(); os.fsync(out.fileno())
+                        check = sqlite3.connect(staged_db)
+                        try:
+                            integrity = check.execute('PRAGMA integrity_check').fetchone()[0]
+                            if integrity != 'ok':
+                                raise ValueError('invalid suite database')
+                            tables = {row[0] for row in check.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+                            required = {'suite_messages','suite_message_recipients','suite_notifications','suite_calendar_events','suite_audit_log','suite_meta'}
+                            if not required.issubset(tables):
+                                raise ValueError('incomplete suite database')
+                        finally:
+                            check.close()
+                    if 'ario_presence.sqlite3' in names:
+                        fd, staged_presence = tempfile.mkstemp(prefix='restore_presence_', suffix='.sqlite3', dir=BASE_DIR)
+                        with os.fdopen(fd, 'wb') as out:
+                            out.write(archive.read('ario_presence.sqlite3'))
+                            out.flush(); os.fsync(out.fileno())
+                        check_presence = sqlite3.connect(staged_presence)
+                        try:
+                            if check_presence.execute('PRAGMA integrity_check').fetchone()[0] != 'ok':
+                                raise ValueError('invalid presence database')
+                        finally:
+                            check_presence.close()
+                    fd, staged_data = tempfile.mkstemp(prefix='restore_school_', suffix='.json', dir=BASE_DIR)
+                    with os.fdopen(fd, 'w', encoding='utf-8') as out:
+                        json.dump(restored_data, out, ensure_ascii=False, indent=2)
+                        out.flush(); os.fsync(out.fileno())
+                # Keep a complete snapshot of the current state before atomic replacements.
+                _suite_make_backup('before_restore')
+                if staged_db:
+                    os.replace(staged_db, ARIO_SUITE_DB)
+                    staged_db = None
+                if staged_presence:
+                    os.replace(staged_presence, PRESENCE_DB)
+                    staged_presence = None
+                os.replace(staged_data, DATA_FILE)
+                staged_data = None
+                _suite_init()
+                _suite_audit(username, 'بازیابی نسخه پشتیبان', safe_name, 'ابتدا از وضعیت قبل از بازیابی نسخه پشتیبان تهیه شد.')
+                notice = 'اطلاعات با موفقیت از نسخه پشتیبان بازیابی شد. ممکن است لازم باشد دوباره وارد حساب شوید.'
+            except Exception:
+                notice = 'بازیابی انجام نشد؛ فایل پشتیبان معتبر نیست یا کامل نیست. اطلاعات فعلی تغییر داده نشد یا از نسخه قبل نسخه پشتیبان گرفته شد.'
+            finally:
+                for temporary_path in (staged_data, staged_db, staged_presence):
+                    if temporary_path and os.path.exists(temporary_path):
+                        try:
+                            os.remove(temporary_path)
+                        except OSError:
+                            pass
+        else:
+            abort(400)
+    os.makedirs(ARIO_SUITE_BACKUP_DIR, exist_ok=True)
+    files = sorted([name for name in os.listdir(ARIO_SUITE_BACKUP_DIR) if name.endswith('.zip')], reverse=True)
+    backup_rows = ''.join(
+        f'<tr><td>{_school_html(name)}</td><td><a class="ario-school-btn" href="/school/backup/{_school_html(name)}">دانلود</a></td><td><form method="post" onsubmit="return confirm(\'اطلاعات فعلی با این نسخه جایگزین شود؟ ابتدا نسخه پشتیبان فعلی ساخته می‌شود.\')"><input type="hidden" name="csrf_token" value="{_school_html(token)}"><input type="hidden" name="action" value="restore"><input type="hidden" name="filename" value="{_school_html(name)}"><button class="ario-school-btn danger" type="submit">بازیابی این نسخه</button></form></td></tr>'
+        for name in files[:30]
+    ) or '<tr><td colspan="3">هنوز نسخه پشتیبانی ساخته نشده است.</td></tr>'
+    notice_html = f'<div class="ario-school-notice">{_school_html(notice)}</div>' if notice else ''
+    content = (
+        '<main class="ario-school-wrap"><section class="ario-school-hero"><span class="ario-school-eyebrow">ARIO DATA PROTECTION</span>'
+        '<h1>پشتیبان‌گیری و بازیابی اطلاعات</h1><p>نسخه‌های روزانه و دستی از اطلاعات اصلی مدرسه و پایگاه داده امکانات جدید.</p>'
+        '<div class="ario-school-actions"><span class="ario-school-chip">پشتیبان‌گیری خودکار روزانه</span><span class="ario-school-chip">نگهداری ۳۰ نسخه اخیر</span></div></section>'
+        f'{notice_html}<form method="post" class="ario-school-panel"><input type="hidden" name="csrf_token" value="{_school_html(token)}"><input type="hidden" name="action" value="create"><h3>ایجاد نسخه پشتیبان دستی</h3><p style="color:#a9bfd8;line-height:2">یک فایل ZIP شامل school_data.json، نسخه پشتیبان آن و پایگاه دادهٔ امکانات جدید ساخته می‌شود.</p><button class="ario-school-btn primary" type="submit">ایجاد پشتیبان همین حالا</button></form>'
+        f'<section class="ario-school-panel"><h3>نسخه‌های ذخیره‌شده</h3><div class="ario-school-table-wrap"><table class="ario-school-table"><thead><tr><th>نام فایل</th><th>دریافت</th><th>بازیابی</th></tr></thead><tbody>{backup_rows}</tbody></table></div>'
+        '<p style="color:#f3d39c;line-height:2;font-size:.76rem;margin-top:12px">پیش از بازیابی، از اطلاعات فعلی نسخهٔ جداگانه ساخته می‌شود. برای ماندگاری روی Render، فایل‌های school_data.json، ario_suite.sqlite3 و پوشه ario_backups باید روی دیسک پایدار (Persistent Disk) قرار داشته باشند؛ فضای موقت سرویس رایگان ممکن است هنگام راه‌اندازی مجدد پاک شود.</p></section></main>'
+    )
+    response = _suite_page(content, 'پشتیبان‌گیری', 'backup')
+    response.headers['Cache-Control'] = 'no-store, private'
+    return response
+
+
+@app.route('/school/backup/<filename>')
+def ario_suite_backup_download(filename):
+    context = _suite_current_context(allow_parent=False)
+    if not context:
+        return redirect(url_for('index'))
+    data, portal, username, role, account = context
+    if not _suite_is_admin(role):
+        abort(403)
+    safe_name = os.path.basename(filename)
+    if safe_name != filename or not safe_name.endswith('.zip'):
+        abort(400)
+    path = os.path.join(ARIO_SUITE_BACKUP_DIR, safe_name)
+    if not os.path.isfile(path):
+        abort(404)
+    _suite_audit(username, 'دریافت نسخه پشتیبان', safe_name, '')
+    return send_file(path, as_attachment=True, download_name=safe_name, mimetype='application/zip', max_age=0)
+
+
+
+
 # ==========================================
 # اجرای برنامه (مخصوص رندر و لوکال)
 # ==========================================
 if __name__ == '__main__':
-    if app.secret_key == 'CHANGE-THIS-SECRET-KEY-BEFORE-DEPLOYMENT':
-        print('WARNING: Set a strong SECRET_KEY environment variable before public deployment.')
+    if not os.environ.get('SECRET_KEY'):
+        print('WARNING: Set a stable, random SECRET_KEY environment variable in production; the temporary random key changes on each restart.')
     port = int(os.environ.get("PORT", 5000))
     app.run(host='0.0.0.0', port=port)
