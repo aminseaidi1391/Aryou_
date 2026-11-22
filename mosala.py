@@ -6,6 +6,10 @@ import sqlite3
 import secrets
 import hmac
 import hashlib
+import urllib.parse
+import urllib.request
+import smtplib
+from email.message import EmailMessage
 import re
 import csv
 import io
@@ -3156,6 +3160,12 @@ html[lang="en"] .login-topbar-actions { margin-left:auto; }
             document.getElementById('tab-' + tabId).classList.add('active');
             document.getElementById('form-' + tabId).classList.add('active');
         }
+        function arioShowForgot() {
+            const form = document.getElementById('ario-forgot-form');
+            if (!form) return;
+            form.hidden = !form.hidden;
+            if (!form.hidden) document.getElementById('ario-forgot-email')?.focus();
+        }
         function togglePassword(id, button) {
             const field = document.getElementById(id);
             const hidden = field.type === 'password';
@@ -3224,7 +3234,7 @@ html[lang="en"] .login-topbar-actions { margin-left:auto; }
                 <div class="card-heading">
                     <div class="card-logo"><div class="brand-mark">آ</div><span>سامانه یکپارچه مدرسه</span></div>
                     <h2>اینجا شروعِ اتفاق‌های بزرگه ✨</h2>
-                    <p>برای ادامه مسیر، وارد حساب کاربری‌ات شو یا حساب جدید بساز.</p>
+                    <p>برای دسترسی به فضای اختصاصی مدرسه، وارد حساب خود شوید یا حساب جدید بسازید.</p>
                 </div>
                 <div class="tabs">
                     <button type="button" id="tab-login" class="tab active" onclick="switchTab('login')">ورود به حساب</button>
@@ -3235,15 +3245,28 @@ html[lang="en"] .login-topbar-actions { margin-left:auto; }
                     <div class="input-shell"><i class="fa-regular fa-user"></i><input id="login-username" type="text" name="username" placeholder="نام کاربری خود را وارد کنید" autocomplete="username" required></div>
                     <label class="field-label" for="login-password">رمز عبور</label>
                     <div class="input-shell"><i class="fa-solid fa-lock"></i><input id="login-password" type="password" name="password" placeholder="رمز عبور" autocomplete="current-password" required><button class="reveal" type="button" onclick="togglePassword('login-password',this)" aria-label="نمایش رمز"><i class="fa-solid fa-eye"></i></button></div>
-                    <button class="submit-btn" type="submit">ورود به سامانه <i class="fa-solid fa-arrow-left"></i></button>
+                    <button class="submit-btn" type="submit"><span>ورود امن به سامانه</span> <i class="fa-solid fa-arrow-left"></i></button>
+                    <div class="ario-auth-links"><button type="button" class="ario-auth-text-link" onclick="switchTab('register')"><i class="fa-solid fa-user-plus"></i> ساخت حساب کاربری</button><button type="button" class="ario-auth-text-link" onclick="arioShowForgot()">رمز عبورم را فراموش کرده‌ام</button></div>
+                    <div class="ario-login-assurance" role="note">
+                      <span class="ario-login-assurance-icon"><i class="fa-solid fa-shield-halved" aria-hidden="true"></i></span>
+                      <span><strong>ورود امن به حساب آریو</strong><small>با نام کاربری و رمز عبور اختصاصی خود وارد شوید. سطح دسترسی شما بر اساس نقش حساب تعیین می‌شود.</small></span>
+                    </div>
                     {% if error and not show_register %}<div class="msg">{{ error }}</div>{% endif %}
                     {% if success %}<div class="msg success">{{ success }}</div>{% endif %}
+                </form>
+                <form id="ario-forgot-form" class="ario-forgot-form" action="/forgot-password" method="POST" hidden>
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token|default('') }}">
+                  <label class="field-label" for="ario-forgot-email">ایمیل ثبت‌شده در حساب</label>
+                  <div class="input-shell"><i class="fa-regular fa-envelope"></i><input id="ario-forgot-email" name="email" type="email" placeholder="ایمیل خود را وارد کنید" autocomplete="email" required></div>
+                  <button class="ario-forgot-submit" type="submit"><i class="fa-regular fa-paper-plane"></i> ارسال لینک بازیابی به ایمیل</button>
                 </form>
                 <form id="form-register" class="auth-form" action="/register" method="POST">
                     <input type="hidden" name="csrf_token" value="{{ csrf_token|default('') }}">
                     <p class="field-hint" style="line-height:1.9;color:#9fb8d4;font-size:.78rem;margin:0 0 10px">با ثبت این فرم، حساب شما فوراً برای استفاده از بخش‌های عمومی سایت فعال می‌شود. درخواست عضویت کلاسی برای مدیر ارسال می‌شود و امکانات اختصاصی کلاس پس از تأیید او باز خواهد شد.</p>
                     <label class="field-label" for="register-full-name">نام و نام خانوادگی</label>
                     <div class="input-shell"><i class="fa-regular fa-id-card"></i><input id="register-full-name" type="text" name="full_name" placeholder="نام واقعی دانش‌آموز" maxlength="80" required></div>
+                    <label class="field-label" for="register-email">ایمیل (برای بازیابی رمز عبور)</label>
+                    <div class="input-shell"><i class="fa-regular fa-envelope"></i><input id="register-email" type="email" name="email" placeholder="name@example.com" autocomplete="email" maxlength="160"></div>
                     <label class="field-label" for="register-username">نام کاربری دلخواه</label>
                     <div class="input-shell"><i class="fa-regular fa-user"></i><input id="register-username" type="text" name="username" placeholder="یک نام کاربری انتخاب کنید" autocomplete="username" minlength="3" maxlength="32" required></div>
                     <label class="field-label" for="register-class">پایه و کلاس درخواستی</label>
@@ -3726,6 +3749,239 @@ def index():
     if 'username' in session: return redirect(url_for('home'))
     return render_template_string(AUTH_HTML, show_register=False, csrf_token=_school_csrf())
 
+def _ario_oauth_error(message, status=400, show_register=False):
+    return render_template_string(AUTH_HTML, error=message, show_register=show_register,
+                                  csrf_token=_school_csrf()), status
+
+
+def _ario_oauth_start(provider):
+    """Start a provider OAuth flow. Each provider has an independent state token."""
+    if provider == 'yahoo':
+        client_id = os.environ.get('YAHOO_CLIENT_ID', '').strip()
+        client_secret = os.environ.get('YAHOO_CLIENT_SECRET', '').strip()
+        callback_endpoint = 'ario_yahoo_callback'
+        auth_endpoint = 'https://api.login.yahoo.com/oauth2/request_auth'
+        scope = 'openid email profile'
+    elif provider == 'github':
+        client_id = os.environ.get('GITHUB_CLIENT_ID', '').strip()
+        client_secret = os.environ.get('GITHUB_CLIENT_SECRET', '').strip()
+        callback_endpoint = 'ario_github_callback'
+        auth_endpoint = 'https://github.com/login/oauth/authorize'
+        scope = 'read:user user:email'
+    else:
+        abort(404)
+    if not client_id or not client_secret:
+        label = 'یاهو' if provider == 'yahoo' else 'گیت‌هاب'
+        return _ario_oauth_error(f'ورود با {label} هنوز پیکربندی نشده است؛ مدیر سایت باید شناسه و کلید OAuth را در تنظیمات هاست ثبت کند.', 503)
+    state = secrets.token_urlsafe(32)
+    session[f'ario_{provider}_oauth_state'] = state
+    callback_env = 'YAHOO_REDIRECT_URI' if provider == 'yahoo' else 'GITHUB_REDIRECT_URI'
+    redirect_uri = os.environ.get(callback_env, request.url_root.rstrip('/') + url_for(callback_endpoint))
+    params = {'client_id': client_id, 'redirect_uri': redirect_uri,
+              'response_type': 'code', 'scope': scope, 'state': state}
+    if provider == 'yahoo':
+        params['nonce'] = secrets.token_urlsafe(24)
+    else:
+        params['allow_signup'] = 'false'
+    return redirect(auth_endpoint + '?' + urllib.parse.urlencode(params))
+
+
+def _ario_oauth_complete(provider, email):
+    """Map verified provider email to an existing Ario account; role permissions stay unchanged."""
+    email = str(email or '').strip().lower()
+    if not email or '@' not in email:
+        raise ValueError('Provider did not return a verified email address')
+    data, _portal = _school_load()
+    username = next((name for name, account in data.get('users', {}).items()
+                     if isinstance(account, dict) and
+                     str(account.get('email', '')).strip().lower() == email), None)
+    if not username:
+        return _ario_oauth_error(
+            'این ایمیل هنوز به حسابی در آریو متصل نیست. ابتدا از بخش «ساخت حساب کاربری» حساب بسازید و همان ایمیل را ثبت کنید.',
+            200, True)
+    account = data.get('users', {}).get(username, {})
+    session.clear()
+    session['username'] = username
+    session['role'] = account.get('role', '')
+    if account.get('role') == 'والد':
+        return redirect(url_for('ario_parent_dashboard'))
+    return redirect(url_for('home'))
+
+
+def _ario_oauth_validate_state(provider):
+    expected = session.pop(f'ario_{provider}_oauth_state', None)
+    supplied = request.args.get('state', '')
+    return bool(expected and supplied and hmac.compare_digest(str(expected), str(supplied)))
+
+
+@app.route('/auth/yahoo')
+def ario_yahoo_login():
+    return _ario_oauth_start('yahoo')
+
+
+@app.route('/auth/yahoo/callback')
+def ario_yahoo_callback():
+    if not _ario_oauth_validate_state('yahoo'):
+        return _ario_oauth_error('درخواست ورود یاهو معتبر نیست؛ دوباره تلاش کنید.', 400)
+    if request.args.get('error'):
+        return _ario_oauth_error('ورود با یاهو لغو شد یا اجازه دسترسی داده نشد.')
+    code = request.args.get('code', '')
+    client_id = os.environ.get('YAHOO_CLIENT_ID', '').strip()
+    client_secret = os.environ.get('YAHOO_CLIENT_SECRET', '').strip()
+    redirect_uri = os.environ.get('YAHOO_REDIRECT_URI', request.url_root.rstrip('/') + url_for('ario_yahoo_callback'))
+    if not (code and client_id and client_secret):
+        return _ario_oauth_error('پاسخ ورود یاهو کامل نیست یا تنظیمات OAuth ناقص است.', 400)
+    try:
+        token_url = 'https://api.login.yahoo.com/oauth2/get_token'
+        basic = base64.b64encode(f'{client_id}:{client_secret}'.encode()).decode()
+        payload = urllib.parse.urlencode({'code': code, 'redirect_uri': redirect_uri,
+                                          'grant_type': 'authorization_code'}).encode()
+        req = urllib.request.Request(token_url, data=payload, headers={
+            'Authorization': 'Basic ' + basic,
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'User-Agent': 'ArioSchool/1.0'})
+        with urllib.request.urlopen(req, timeout=15) as response:
+            token_data = json.loads(response.read().decode('utf-8'))
+        access_token = token_data.get('access_token', '')
+        if not access_token:
+            raise ValueError('Yahoo access token missing')
+        req = urllib.request.Request('https://api.login.yahoo.com/openid/v1/userinfo', headers={
+            'Authorization': 'Bearer ' + access_token, 'Accept': 'application/json',
+            'User-Agent': 'ArioSchool/1.0'})
+        with urllib.request.urlopen(req, timeout=15) as response:
+            identity = json.loads(response.read().decode('utf-8'))
+        if identity.get('email_verified') not in (True, 'true', 'True'):
+            raise ValueError('Yahoo email is not verified')
+        return _ario_oauth_complete('yahoo', identity.get('email'))
+    except Exception:
+        app.logger.exception('Yahoo OAuth callback failed')
+        return _ario_oauth_error('تأیید ورود یاهو انجام نشد. شناسه، کلید محرمانه و نشانی بازگشت را بررسی کنید.', 502)
+
+
+@app.route('/auth/github')
+def ario_github_login():
+    return _ario_oauth_start('github')
+
+
+@app.route('/auth/github/callback')
+def ario_github_callback():
+    if not _ario_oauth_validate_state('github'):
+        return _ario_oauth_error('درخواست ورود گیت‌هاب معتبر نیست؛ دوباره تلاش کنید.', 400)
+    if request.args.get('error'):
+        return _ario_oauth_error('ورود با گیت‌هاب لغو شد یا اجازه دسترسی داده نشد.')
+    code = request.args.get('code', '')
+    client_id = os.environ.get('GITHUB_CLIENT_ID', '').strip()
+    client_secret = os.environ.get('GITHUB_CLIENT_SECRET', '').strip()
+    redirect_uri = os.environ.get('GITHUB_REDIRECT_URI', request.url_root.rstrip('/') + url_for('ario_github_callback'))
+    if not (code and client_id and client_secret):
+        return _ario_oauth_error('پاسخ ورود گیت‌هاب کامل نیست یا تنظیمات OAuth ناقص است.', 400)
+    try:
+        payload = urllib.parse.urlencode({'code': code, 'client_id': client_id,
+                                          'client_secret': client_secret,
+                                          'redirect_uri': redirect_uri}).encode()
+        req = urllib.request.Request('https://github.com/login/oauth/access_token', data=payload, headers={
+            'Accept': 'application/json', 'Content-Type': 'application/x-www-form-urlencoded',
+            'User-Agent': 'ArioSchool/1.0'})
+        with urllib.request.urlopen(req, timeout=15) as response:
+            token_data = json.loads(response.read().decode('utf-8'))
+        access_token = token_data.get('access_token', '')
+        if not access_token:
+            raise ValueError('GitHub access token missing')
+        headers = {'Authorization': 'Bearer ' + access_token, 'Accept': 'application/vnd.github+json',
+                   'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'ArioSchool/1.0'}
+        req = urllib.request.Request('https://api.github.com/user', headers=headers)
+        with urllib.request.urlopen(req, timeout=15) as response:
+            profile = json.loads(response.read().decode('utf-8'))
+        # Use GitHub's verified-primary email endpoint; profile.email can be
+        # absent or not carry an explicit verification flag.
+        req = urllib.request.Request('https://api.github.com/user/emails', headers=headers)
+        with urllib.request.urlopen(req, timeout=15) as response:
+            emails = json.loads(response.read().decode('utf-8'))
+        verified_primary = next((item.get('email') for item in emails
+                                 if isinstance(item, dict) and item.get('primary') is True
+                                 and item.get('verified') is True), None)
+        email = str(verified_primary or '').strip().lower()
+        if not email:
+            raise ValueError('GitHub has no verified primary email available')
+        return _ario_oauth_complete('github', email)
+    except Exception:
+        app.logger.exception('GitHub OAuth callback failed')
+        return _ario_oauth_error('تأیید ورود گیت‌هاب انجام نشد. شناسه، کلید محرمانه و نشانی بازگشت را بررسی کنید.', 502)
+
+
+@app.route('/forgot-password', methods=['POST'])
+def ario_forgot_password():
+    if not _school_valid_csrf():
+        return render_template_string(AUTH_HTML, error="فرم منقضی شده است؛ صفحه را تازه‌سازی و دوباره تلاش کنید.", show_register=False, csrf_token=_school_csrf()), 400
+    email = request.form.get('email', '').strip().lower()[:160]
+    if not email or '@' not in email:
+        return render_template_string(AUTH_HTML, error="لطفاً یک نشانی ایمیل معتبر وارد کنید.", show_register=False, csrf_token=_school_csrf()), 400
+    smtp_host = os.environ.get('ARIO_SMTP_HOST', '').strip()
+    smtp_user = os.environ.get('ARIO_SMTP_USER', '').strip()
+    smtp_password = os.environ.get('ARIO_SMTP_PASSWORD', '')
+    if not (smtp_host and smtp_user and smtp_password):
+        return render_template_string(AUTH_HTML, error="سرویس ارسال ایمیل هنوز توسط مدیر سایت پیکربندی نشده است. پس از ثبت تنظیمات ایمیل، بازیابی رمز فعال می‌شود.", show_register=False, csrf_token=_school_csrf()), 503
+    data, _portal = _school_load()
+    username = next((name for name, account in data.get('users', {}).items()
+                     if isinstance(account, dict) and str(account.get('email', '')).strip().lower() == email), None)
+    # A generic response avoids revealing whether an address belongs to an account.
+    generic = "اگر این ایمیل به حسابی در آریو متصل باشد، لینک بازیابی برای آن ارسال شده است."
+    if not username:
+        return render_template_string(AUTH_HTML, success=generic, show_register=False, csrf_token=_school_csrf())
+    token = secrets.token_urlsafe(36)
+    token_hash = hashlib.sha256(token.encode('utf-8')).hexdigest()
+    data.setdefault('password_reset_tokens', {})[token_hash] = {'username': username, 'expires_at': int(datetime.now().timestamp()) + 1800}
+    save_data(data)
+    reset_url = request.url_root.rstrip('/') + url_for('ario_reset_password', token=token)
+    message = EmailMessage()
+    message['Subject'] = 'بازیابی رمز عبور سامانه آریو'
+    message['From'] = os.environ.get('ARIO_SMTP_FROM', smtp_user)
+    message['To'] = email
+    message.set_content('برای تعیین رمز عبور جدید، حداکثر تا ۳۰ دقیقه آینده این پیوند را باز کنید:\n' + reset_url + '\n\nاگر شما این درخواست را ثبت نکرده‌اید، این پیام را نادیده بگیرید.')
+    try:
+        port = int(os.environ.get('ARIO_SMTP_PORT', '587'))
+        if os.environ.get('ARIO_SMTP_SSL', '').lower() in ('1', 'true', 'yes'):
+            with smtplib.SMTP_SSL(smtp_host, port, timeout=15) as server:
+                server.login(smtp_user, smtp_password)
+                server.send_message(message)
+        else:
+            with smtplib.SMTP(smtp_host, port, timeout=15) as server:
+                server.ehlo(); server.starttls(); server.ehlo()
+                server.login(smtp_user, smtp_password)
+                server.send_message(message)
+    except Exception:
+        data.get('password_reset_tokens', {}).pop(token_hash, None)
+        save_data(data)
+        app.logger.exception('Password reset email could not be sent')
+        return render_template_string(AUTH_HTML, error="ارسال ایمیل بازیابی انجام نشد. مدیر باید تنظیمات SMTP را بررسی کند.", show_register=False, csrf_token=_school_csrf()), 502
+    return render_template_string(AUTH_HTML, success=generic, show_register=False, csrf_token=_school_csrf())
+
+@app.route('/reset-password', methods=['GET', 'POST'])
+def ario_reset_password():
+    token = request.values.get('token', '').strip()
+    token_hash = hashlib.sha256(token.encode('utf-8')).hexdigest() if token else ''
+    data, _portal = _school_load()
+    record = data.get('password_reset_tokens', {}).get(token_hash)
+    valid = bool(record and int(record.get('expires_at', 0)) >= int(datetime.now().timestamp()))
+    if request.method == 'POST':
+        new_password = request.form.get('password', '')
+        if not valid:
+            return render_template_string(AUTH_HTML, error="پیوند بازیابی نامعتبر یا منقضی شده است. دوباره درخواست بازیابی بدهید.", show_register=False, csrf_token=_school_csrf()), 400
+        if len(new_password) < 8:
+            return render_template_string(ARIO_RESET_PASSWORD_HTML, token=token, error="رمز عبور باید حداقل ۸ نویسه باشد.")
+        account = data.get('users', {}).get(record.get('username'))
+        if not isinstance(account, dict):
+            return render_template_string(AUTH_HTML, error="حساب کاربری پیدا نشد.", show_register=False, csrf_token=_school_csrf()), 404
+        account['password'] = generate_password_hash(new_password)
+        data.get('password_reset_tokens', {}).pop(token_hash, None)
+        save_data(data)
+        return render_template_string(AUTH_HTML, success="رمز عبور با موفقیت تغییر کرد. اکنون می‌توانید وارد شوید.", show_register=False, csrf_token=_school_csrf())
+    if not valid:
+        return render_template_string(AUTH_HTML, error="پیوند بازیابی نامعتبر یا منقضی شده است. دوباره درخواست بازیابی بدهید.", show_register=False, csrf_token=_school_csrf()), 400
+    return render_template_string(ARIO_RESET_PASSWORD_HTML, token=token, error='')
+
+ARIO_RESET_PASSWORD_HTML = r"""<!doctype html><html lang="fa" dir="rtl"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>تعیین رمز جدید | آریو</title><body style="margin:0;min-height:100vh;display:grid;place-items:center;background:linear-gradient(135deg,#071426,#102d4d);font-family:Tahoma,sans-serif;color:#f4f7ff"><form method="post" style="width:min(420px,calc(100% - 36px));box-sizing:border-box;padding:30px;border:1px solid #ffffff28;border-radius:24px;background:#10233bea;box-shadow:0 25px 70px #0006"><h2>تعیین رمز عبور جدید</h2><p style="color:#b5c6dc;line-height:1.9">رمز جدید خود را وارد کنید. حداقل ۸ نویسه لازم است.</p><input type="hidden" name="token" value="{{ token }}"><label for="new-password">رمز عبور جدید</label><input id="new-password" name="password" type="password" minlength="8" autocomplete="new-password" required style="display:block;width:100%;box-sizing:border-box;margin:10px 0 18px;padding:14px;border-radius:12px;border:1px solid #ffffff30;background:#08182c;color:white"><button style="width:100%;padding:14px;border:0;border-radius:12px;background:linear-gradient(110deg,#e9d7b5,#c5a779);font-weight:bold;cursor:pointer">ذخیره رمز جدید</button>{% if error %}<p role="alert">{{ error }}</p>{% endif %}</form></body></html>"""
+
 @app.route('/login', methods=['POST'])
 def login():
     user = request.form.get('username', '').strip()
@@ -3770,6 +4026,7 @@ def register():
     pw = request.form.get('password', '')
     full_name = request.form.get('full_name', '').strip()[:80]
     request_message = request.form.get('request_message', '').strip()[:240]
+    email = request.form.get('email', '').strip().lower()[:160]
     class_id = request.form.get('class_id', '').strip()
     if not _school_valid_csrf():
         return render_template_string(AUTH_HTML, error="فرم منقضی شده است؛ صفحه را تازه‌سازی و دوباره تلاش کنید.", show_register=True, csrf_token=_school_csrf())
@@ -3794,6 +4051,7 @@ def register():
         'password': generate_password_hash(pw),
         'role': 'دانش‌آموز',
         'full_name': full_name,
+        'email': email,
         'requested_class_id': class_id,
         'class_access_approved': False,
         'class_access_status': 'pending',
@@ -4530,9 +4788,9 @@ def contact():
           </div>
           <h3>ارتباط و مراجعه</h3>
           <p>برای پرسش‌ها، هماهنگی و مراجعه حضوری، با دفتر مدرسه آریو تماس بگیرید یا مسیر رسیدن به مدرسه را از موقعیت فعلی خود پیدا کنید.</p>
-          <a class="contact-phone-link" href="tel:+98443250547" aria-label="تماس با مدرسه آریو">
+          <a class="contact-phone-link" href="tel:+984433250547" aria-label="تماس با مدرسه آریو">
             <i class="fas fa-phone" aria-hidden="true"></i>
-            <bdi>۰۴۴-۳۲۵۰۵۴۷</bdi>
+            <bdi>۰۴۴-۳۳۲۵۰۵۴۷</bdi>
           </a>
           <div class="contact-actions">
             <a class="contact-action primary" id="arioNeshanDirections"
@@ -4540,7 +4798,7 @@ def contact():
               <i class="fas fa-route" aria-hidden="true"></i>
               مسیریابی از موقعیت فعلی در نشان
             </a>
-            <a class="contact-action" href="tel:+98443250547">
+            <a class="contact-action" href="tel:+984433250547">
               <i class="fas fa-headset" aria-hidden="true"></i>
               تماس مستقیم با مدرسه
             </a>
@@ -4758,6 +5016,17 @@ ADMIN_HTML = BASE_TEMPLATE.replace("{% block content %}{% endblock %}", """
         .ario-user-management .users-search::placeholder{color:#a3b6cb}
         .ario-user-management .users-summary{display:flex;align-items:center;justify-content:center;gap:8px;border:1px solid rgba(162,193,229,.16);background:rgba(255,255,255,.045);border-radius:13px;padding:10px 14px;color:#c3d2e5;font-size:.85rem}
         .ario-user-management .users-summary strong{color:#8cebd0;font-size:1.15rem}
+        .ario-user-management .user-category-tabs{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin:18px 0 14px}
+        .ario-user-management .user-category-tab{display:flex;align-items:center;justify-content:space-between;gap:9px;min-width:0;padding:13px 15px;border:1px solid rgba(162,193,229,.17);border-radius:15px;background:rgba(255,255,255,.045);color:#c9d8e9;font:inherit;font-size:.84rem;font-weight:850;cursor:pointer;transition:transform .18s,border-color .18s,background .18s}
+        .ario-user-management .user-category-tab:hover{transform:translateY(-2px);border-color:rgba(145,194,245,.42)}
+        .ario-user-management .user-category-tab[aria-pressed="true"]{background:linear-gradient(125deg,rgba(45,104,157,.42),rgba(25,56,91,.65));border-color:rgba(135,190,244,.58);color:#fff;box-shadow:0 8px 24px rgba(0,0,0,.14)}
+        .ario-user-management .user-category-tab .category-count{display:grid;place-items:center;min-width:27px;height:27px;padding:0 7px;border-radius:9px;background:rgba(255,255,255,.09);color:#dcecff;font-size:.75rem;font-variant-numeric:tabular-nums}
+        .ario-user-management .user-category-tab[aria-pressed="true"] .category-count{background:rgba(255,255,255,.16);color:#fff}
+        .ario-user-management .user-category-tab i{font-size:1rem;opacity:.9}
+        .ario-user-management .user-list-heading{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:14px 0 11px;color:#e8f2ff;font-size:.9rem;font-weight:850}
+        .ario-user-management .user-list-heading small{color:#91a9c4;font-size:.72rem;font-weight:600}
+        .ario-user-management .user-card[hidden]{display:none!important}
+        @media(max-width:720px){.ario-user-management .user-category-tabs{grid-template-columns:repeat(2,minmax(0,1fr))}}
         .ario-user-management .user-create-form{display:grid;grid-template-columns:1fr 1fr minmax(150px,.7fr) auto;gap:9px;margin:18px 0 22px;padding:15px;border:1px solid rgba(162,193,229,.14);border-radius:17px;background:rgba(255,255,255,.035)}
         .ario-user-management .user-create-form input,.ario-user-management .user-create-form select{min-width:0;width:100%;border:1px solid rgba(162,193,229,.2)!important;background:rgba(255,255,255,.08)!important;color:#fff!important;border-radius:11px!important;padding:11px 12px!important}
         .ario-user-management .user-create-form select option{color:#122033;background:#fff}
@@ -4802,10 +5071,18 @@ ADMIN_HTML = BASE_TEMPLATE.replace("{% block content %}{% endblock %}", """
         <div class="users-summary">تعداد حساب‌ها: <strong id="arioUserCount">{{ data.users|length }}</strong></div>
       </div>
 
+      <div class="user-category-tabs" role="group" aria-label="دسته‌بندی کاربران">
+        <button class="user-category-tab" type="button" data-user-filter="managers" aria-pressed="true"><span><i class="fas fa-user-shield"></i> مدیران</span><span class="category-count">{{ data.users.values()|selectattr('role','in',['مدیر سایت (شما)','مدیر مدرسه'])|list|length }}</span></button>
+        <button class="user-category-tab" type="button" data-user-filter="students" aria-pressed="false"><span><i class="fas fa-user-graduate"></i> دانش‌آموزان</span><span class="category-count">{{ data.users.values()|selectattr('role','equalto','دانش‌آموز')|list|length }}</span></button>
+        <button class="user-category-tab" type="button" data-user-filter="teachers" aria-pressed="false"><span><i class="fas fa-chalkboard-teacher"></i> معلمان</span><span class="category-count">{{ data.users.values()|selectattr('role','equalto','معلم')|list|length }}</span></button>
+        <button class="user-category-tab" type="button" data-user-filter="parents" aria-pressed="false"><span><i class="fas fa-people-roof"></i> والدین</span><span class="category-count">{{ data.users.values()|selectattr('role','in',['والد','والدین','سرپرست'])|list|length }}</span></button>
+      </div>
+      <div class="user-list-heading"><span id="arioUserCategoryTitle">فهرست مدیران</span><small>برای مشاهده هر گروه، دسته‌بندی مربوط را انتخاب کن</small></div>
       <div class="user-cards" id="arioAllUsersList">
         {% for uname, uinfo in data.users|dictsort %}
           {% set user_is_admin = uinfo.role in ['مدیر سایت (شما)', 'مدیر مدرسه'] %}
-          <article class="user-card" data-user-card data-search="{{ (uname ~ ' ' ~ uinfo.role)|lower }}">
+          {% set user_category = 'managers' if user_is_admin else ('teachers' if uinfo.role == 'معلم' else ('parents' if uinfo.role in ['والد','والدین','سرپرست'] else 'students')) %}
+          <article class="user-card" data-user-card data-category="{{ user_category }}" data-search="{{ (uname ~ ' ' ~ uinfo.role)|lower }}" {% if user_category != 'managers' %}hidden{% endif %}>
             <div class="user-card-main">
               <span class="user-avatar"><i class="fas fa-user" aria-hidden="true"></i></span>
               <div class="user-identity">
@@ -4854,14 +5131,30 @@ ADMIN_HTML = BASE_TEMPLATE.replace("{% block content %}{% endblock %}", """
         const cards=Array.from(document.querySelectorAll('[data-user-card]'));
         const count=document.getElementById('arioUserCount');
         const empty=document.getElementById('arioUsersNoMatch');
+        const tabs=Array.from(document.querySelectorAll('[data-user-filter]'));
+        const title=document.getElementById('arioUserCategoryTitle');
         if(!input||!count||!empty)return;
+        const titles={managers:'فهرست مدیران',students:'فهرست دانش‌آموزان',teachers:'فهرست معلمان',parents:'فهرست والدین'};
+        let activeCategory='managers';
         function filterUsers(){
           const q=input.value.trim().toLocaleLowerCase();let visible=0;
-          cards.forEach(card=>{const match=(card.dataset.search||'').toLocaleLowerCase().includes(q);card.hidden=!match;if(match)visible++;});
+          cards.forEach(card=>{
+            const categoryMatch=card.dataset.category===activeCategory;
+            const textMatch=(card.dataset.search||'').toLocaleLowerCase().includes(q);
+            const show=categoryMatch&&textMatch;
+            card.hidden=!show;if(show)visible++;
+          });
           count.textContent=String(visible).replace(/[0-9]/g,d=>'۰۱۲۳۴۵۶۷۸۹'[Number(d)]);
           empty.classList.toggle('show',visible===0);
+          if(title)title.textContent=titles[activeCategory]||'فهرست کاربران';
         }
+        tabs.forEach(tab=>tab.addEventListener('click',()=>{
+          activeCategory=tab.dataset.userFilter||'managers';
+          tabs.forEach(item=>item.setAttribute('aria-pressed',String(item===tab)));
+          filterUsers();
+        }));
         input.addEventListener('input',filterUsers);
+        filterUsers();
       })();
       </script>
     </section>
@@ -6481,6 +6774,96 @@ ARIO_MOBILE_LOGIN_CSS = r"""
 """
 AUTH_HTML = AUTH_HTML.replace("</style>", ARIO_MOBILE_LOGIN_CSS + "\n</style>", 1)
 
+ARIO_AUTH_PREMIUM_CSS = r"""
+/* Premium login-card refinement: the adjacent welcome panel is intentionally untouched. */
+.auth-card{position:relative;overflow:hidden;border:1px solid rgba(186,207,239,.22)!important;background:linear-gradient(155deg,rgba(17,37,65,.96),rgba(7,20,38,.97))!important;box-shadow:0 34px 100px rgba(0,0,0,.38),inset 0 1px rgba(255,255,255,.10)!important;border-radius:30px!important;padding:clamp(25px,3vw,38px)!important}
+.auth-card:after{content:"";position:absolute;inset:0 12% auto;height:1px;background:linear-gradient(90deg,transparent,rgba(218,194,146,.8),transparent);pointer-events:none}
+.auth-card .card-heading{text-align:center;margin-bottom:23px}
+.auth-card .card-logo{justify-content:center;gap:12px;color:#dce8f8;letter-spacing:.1px}
+.auth-card .brand-mark{width:48px;height:48px;border-radius:16px;background:linear-gradient(145deg,#f1dfbd,#c8a873);color:#14243b;box-shadow:0 9px 26px rgba(205,174,119,.22)}
+.auth-card .card-heading h2{font-size:clamp(1.2rem,2vw,1.5rem);line-height:1.8;margin:17px 0 5px;color:#f7f9ff}
+.auth-card .card-heading p{color:#a9bad1;line-height:1.9;font-size:.82rem}
+.auth-card .tabs{border:1px solid rgba(181,204,239,.12);background:rgba(3,12,25,.55);border-radius:15px;padding:5px}
+.auth-card .tab{border-radius:11px;transition:all .2s ease}
+.auth-card .tab.active{box-shadow:0 7px 18px rgba(0,0,0,.18)}
+.auth-card .field-label{display:block;margin:14px 2px 7px;color:#d9e4f4;font-size:.82rem;font-weight:750}
+.auth-card .input-shell{min-height:52px;border:1px solid rgba(169,195,232,.18);border-radius:14px;background:rgba(3,13,27,.45);transition:border-color .2s,box-shadow .2s,transform .2s}
+.auth-card .input-shell:focus-within{border-color:rgba(119,190,224,.78);box-shadow:0 0 0 4px rgba(87,166,211,.12);transform:translateY(-1px)}
+.auth-card .input-shell input{color:#f5f8ff}
+.auth-card .input-shell input::placeholder{color:#7489a6}
+.auth-card .submit-btn{width:100%;min-height:54px;margin-top:20px;border-radius:14px!important;background:linear-gradient(110deg,#e9d7b5,#c5a779)!important;color:#172943!important;font-weight:900;box-shadow:0 12px 28px rgba(191,158,105,.18);display:flex;align-items:center;justify-content:center;gap:12px}
+.ario-auth-links{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:15px 2px 5px;flex-wrap:wrap}
+.ario-auth-text-link{border:0;background:transparent;color:#b9cbe2;font:700 .76rem 'Vazirmatn',sans-serif;cursor:pointer;padding:5px 0;transition:color .2s}
+.ario-auth-text-link:hover{color:#f0d9ad}
+.ario-auth-text-link i{margin-left:5px;color:#d7bd91}
+.ario-auth-divider{display:flex;align-items:center;gap:12px;margin:16px 0;color:#8194ae;font-size:.72rem}
+.ario-auth-divider:before,.ario-auth-divider:after{content:"";height:1px;flex:1;background:linear-gradient(90deg,transparent,rgba(171,194,226,.2))}
+.ario-auth-divider:after{transform:scaleX(-1)}
+.ario-social-login-grid{display:grid;grid-template-columns:1fr 1fr;gap:11px}
+.ario-social-login{position:relative;min-height:70px;display:flex;align-items:center;gap:11px;padding:12px 13px;text-decoration:none;border:1px solid rgba(179,201,233,.22);border-radius:16px;background:linear-gradient(145deg,rgba(255,255,255,.075),rgba(255,255,255,.025));color:#edf4ff;box-shadow:inset 0 1px rgba(255,255,255,.06),0 8px 24px rgba(0,0,0,.1);transition:transform .2s,border-color .2s,box-shadow .2s;overflow:hidden}
+.ario-social-login:hover,.ario-social-login:focus-visible{transform:translateY(-3px);border-color:rgba(213,190,151,.65);box-shadow:0 12px 28px rgba(0,0,0,.2),0 0 0 3px rgba(213,190,151,.08);outline:none}
+.ario-social-brand{flex:0 0 34px;width:34px;height:34px;display:grid;place-items:center;border-radius:11px;background:#fff;color:#6001d2;font:900 1rem Arial,sans-serif}
+.ario-social-login.github .ario-social-icon{flex:0 0 34px;width:34px;height:34px;display:grid;place-items:center;border-radius:11px;background:#f4f6fa;color:#172033;font-size:1.45rem}
+.ario-social-copy{display:flex;flex-direction:column;gap:3px;min-width:0}
+.ario-social-copy strong{font-size:.76rem;font-weight:850;white-space:nowrap}
+.ario-social-copy small{font-size:.63rem;color:#9fb2cc;white-space:nowrap}
+.ario-social-login>i:last-child{margin-right:auto;margin-left:0;color:#8fa6c4;font-size:.65rem}
+.ario-social-hint{margin:10px 2px 0;text-align:center;color:#91a6c1;font-size:.66rem;line-height:1.9}
+.ario-forgot-form{margin-top:15px;padding:16px;border:1px solid rgba(170,198,235,.17);border-radius:16px;background:rgba(2,12,25,.36)}
+.ario-forgot-form[hidden]{display:none!important}
+.ario-forgot-submit{width:100%;min-height:46px;margin-top:12px;border:1px solid rgba(113,202,188,.32);border-radius:12px;background:linear-gradient(110deg,rgba(34,119,117,.85),rgba(38,91,135,.9));color:#efffff;font:800 .78rem 'Vazirmatn',sans-serif;cursor:pointer}
+body[data-theme="light"] .auth-card{background:linear-gradient(155deg,rgba(255,255,255,.99),rgba(241,246,253,.98))!important;border-color:rgba(111,139,181,.2)!important}
+body[data-theme="light"] .auth-card .card-heading h2{color:#182b47}
+body[data-theme="light"] .auth-card .card-heading p,body[data-theme="light"] .auth-card .field-label{color:#526783}
+body[data-theme="light"] .auth-card .input-shell{background:#f5f8fd;border-color:#d9e2ef}
+body[data-theme="light"] .auth-card .input-shell input{color:#172b48}
+body[data-theme="light"] .ario-auth-text-link{color:#526783}
+body[data-theme="light"] .ario-social-login{background:linear-gradient(145deg,#fff,#f3f7fd);color:#263b59;border-color:#d9e2ef}
+body[data-theme="light"] .ario-social-copy small,body[data-theme="light"] .ario-social-hint{color:#60738d}
+@media(max-width:420px){.ario-social-login-grid{grid-template-columns:1fr}.ario-social-login{min-height:62px}}
+@media(max-width:760px){.auth-card{padding:23px 18px!important}.ario-auth-links{gap:8px}.ario-auth-text-link{font-size:.72rem}}
+"""
+AUTH_HTML = AUTH_HTML.replace("</style>", ARIO_AUTH_PREMIUM_CSS + "\n</style>", 1)
+
+
+ARIO_AUTH_LOGIN_REFINED_CSS = r"""
+/* Refined native Ario sign-in: no third-party continuation buttons */
+.auth-card{position:relative;isolation:isolate;border:1px solid rgba(133,177,224,.24)!important;border-radius:30px!important;background:linear-gradient(155deg,rgba(17,39,67,.97),rgba(8,22,41,.97))!important;box-shadow:0 32px 90px rgba(0,0,0,.38),inset 0 1px 0 rgba(255,255,255,.07)!important;overflow:hidden}
+.auth-card:before{content:"";position:absolute;inset:0 0 auto;height:3px;background:linear-gradient(90deg,transparent,#55e4d2 24%,#83a8ff 72%,transparent);opacity:.9;pointer-events:none}
+.card-heading{padding-bottom:22px!important}
+.card-heading h2{font-size:clamp(1.25rem,2.2vw,1.65rem)!important;line-height:1.8!important;letter-spacing:-.35px}
+.card-heading>p{color:#a9bdd5!important;line-height:2!important;font-size:.88rem!important}
+.card-logo{color:#d9e9fb!important;letter-spacing:.1px}
+.tabs{display:grid!important;grid-template-columns:1fr 1fr!important;gap:7px!important;padding:6px!important;border:1px solid rgba(154,190,226,.14)!important;border-radius:17px!important;background:rgba(3,13,27,.52)!important;margin:0 0 25px!important}
+.tab{min-height:47px!important;border-radius:12px!important;font-weight:800!important;transition:background .2s,border-color .2s,transform .2s!important}
+.tab.active{background:linear-gradient(135deg,#1b6680,#315c9d)!important;color:#fff!important;box-shadow:0 7px 20px rgba(22,105,145,.22)!important}
+.auth-form{gap:0!important}
+.field-label{display:block!important;margin:15px 2px 8px!important;color:#dce9f8!important;font-size:.82rem!important;font-weight:800!important}
+.input-shell{min-height:55px!important;border:1px solid rgba(145,180,218,.22)!important;border-radius:15px!important;background:rgba(3,14,29,.56)!important;transition:border-color .2s,box-shadow .2s,background .2s!important}
+.input-shell:focus-within{border-color:rgba(85,228,210,.75)!important;background:rgba(5,22,39,.82)!important;box-shadow:0 0 0 4px rgba(85,228,210,.09)!important}
+.input-shell input,.input-shell select{color:#f5f9ff!important;font-size:.9rem!important}
+.input-shell input::placeholder{color:#7f95b1!important}
+.input-shell>i{color:#79b9d4!important}
+.reveal{color:#a9c0da!important;min-width:42px!important;min-height:42px!important;border-radius:11px!important}
+.submit-btn{width:100%!important;min-height:56px!important;margin-top:23px!important;border:1px solid rgba(119,231,220,.32)!important;border-radius:16px!important;background:linear-gradient(110deg,#147d83,#2369a8 58%,#425caa)!important;color:white!important;font-size:.94rem!important;font-weight:900!important;box-shadow:0 13px 28px rgba(20,107,142,.25)!important;transition:transform .2s,filter .2s,box-shadow .2s!important}
+.submit-btn:hover{transform:translateY(-2px)!important;filter:brightness(1.08)!important;box-shadow:0 17px 34px rgba(20,107,142,.32)!important}
+.ario-auth-links{display:flex!important;align-items:center!important;justify-content:space-between!important;gap:12px!important;flex-wrap:wrap!important;margin:17px 1px 0!important}
+.ario-auth-text-link{color:#a9cce8!important;font-size:.78rem!important;font-weight:800!important;text-decoration:none!important;transition:color .2s!important}
+.ario-auth-text-link:hover{color:#65e3d2!important}
+.ario-login-assurance{display:flex;align-items:flex-start;gap:12px;margin:24px 0 3px;padding:14px 15px;border:1px solid rgba(85,228,210,.17);border-radius:16px;background:linear-gradient(110deg,rgba(34,112,125,.13),rgba(43,76,125,.14))}
+.ario-login-assurance-icon{display:grid;place-items:center;flex:0 0 37px;width:37px;height:37px;border:1px solid rgba(85,228,210,.25);border-radius:12px;background:rgba(85,228,210,.09);color:#65e3d2;font-size:1rem}
+.ario-login-assurance strong,.ario-login-assurance small{display:block}
+.ario-login-assurance strong{color:#e4f2ff;font-size:.78rem;font-weight:900;margin:0 0 4px}
+.ario-login-assurance small{color:#9db4ce;font-size:.7rem;line-height:1.9}
+.secure-note{color:#9fb8d4!important;border-top:1px solid rgba(145,180,218,.12)!important;padding-top:17px!important;margin-top:20px!important}
+.msg{border-radius:13px!important;line-height:1.9!important}
+@media(max-width:760px){.auth-card{border-radius:23px!important;padding:22px 18px!important}.card-heading{padding-bottom:17px!important}.tabs{margin-bottom:19px!important}.input-shell{min-height:53px!important}.ario-login-assurance{margin-top:20px!important}.ario-auth-links{align-items:flex-start!important}}
+@media(prefers-reduced-motion:reduce){.auth-card,.tab,.input-shell,.submit-btn,.ario-auth-text-link{transition:none!important}}
+"""
+AUTH_HTML = AUTH_HTML.replace("</style>", ARIO_AUTH_LOGIN_REFINED_CSS + "\n</style>", 1)
+
+
+
 # One-click PWA install button and install prompt on the login page.
 AUTH_HTML = AUTH_HTML.replace("</style>", "\n.ario-auth-install-trigger{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:40px;padding:9px 13px;border:1px solid rgba(114,223,192,.38);border-radius:13px;background:linear-gradient(135deg,rgba(35,105,125,.42),rgba(24,66,103,.58));color:#eaf8ff;font:800 .78rem 'Vazirmatn',sans-serif;white-space:nowrap;cursor:pointer;box-shadow:0 8px 22px rgba(0,0,0,.12);transition:transform .18s ease,border-color .18s ease,background .18s ease}\n.ario-auth-install-trigger i{color:#72dfc0;font-size:1rem}\n.ario-auth-install-trigger:hover,.ario-auth-install-trigger:focus-visible{transform:translateY(-1px);border-color:#72dfc0;outline:none}\n.ario-auth-install-trigger.is-installable{background:linear-gradient(135deg,#147d75,#17639a);border-color:#72dfc0;box-shadow:0 0 0 3px rgba(114,223,192,.12),0 10px 24px rgba(0,0,0,.18)}\n.ario-auth-install-trigger.is-installed{opacity:.78}\n@media(max-width:760px){.ario-auth-install-trigger{min-height:37px;padding:8px 10px;gap:6px;font-size:.72rem;border-radius:11px}.ario-auth-install-trigger i{font-size:.9rem}}\n@media(max-width:360px){.ario-auth-install-trigger span{display:none}.ario-auth-install-trigger{width:39px;padding:0;flex:0 0 39px}}\n" + "\n</style>", 1)
 AUTH_HTML = AUTH_HTML.replace("</body>", '<script id="ario-auth-pwa-install">\n(function(){\n  \'use strict\';\n  const button=document.querySelector(\'[data-ario-install]\');\n  if(!button)return;\n  let deferredPrompt=null;\n  const supportsWebInstall=typeof Navigator!==\'undefined\'&&typeof Navigator.prototype.install===\'function\';\n  const isStandalone=()=>window.matchMedia(\'(display-mode: standalone)\').matches||window.navigator.standalone===true;\n  const isIOS=()=>/iphone|ipad|ipod/i.test(navigator.userAgent)&&!window.MSStream;\n  function notice(message){\n    let node=document.getElementById(\'ario-install-notice\');\n    if(!node){node=document.createElement(\'div\');node.id=\'ario-install-notice\';node.setAttribute(\'role\',\'status\');node.setAttribute(\'aria-live\',\'polite\');node.style.cssText=\'position:fixed;z-index:99999;bottom:18px;left:14px;right:14px;max-width:520px;margin:auto;padding:15px 17px;border:1px solid rgba(114,223,192,.35);border-radius:16px;background:#0d2743;color:#f4f8ff;box-shadow:0 18px 50px #0007;font:700 13px/2 Vazirmatn,Tahoma,sans-serif;text-align:center;\';document.body.appendChild(node);}\n    node.textContent=message;node.hidden=false;clearTimeout(notice.timer);notice.timer=setTimeout(()=>{node.hidden=true;},8500);\n  }\n  function markInstalled(){button.classList.remove(\'is-installable\');button.classList.add(\'is-installed\');button.innerHTML=\'<i class="fa-solid fa-circle-check" aria-hidden="true"></i><span>آریو نصب شد</span>\';button.setAttribute(\'aria-label\',\'برنامه آریو نصب شده است\');}\n  if(isStandalone())markInstalled();\n  if(supportsWebInstall)button.classList.add(\'is-installable\');\n  window.addEventListener(\'beforeinstallprompt\',function(event){event.preventDefault();deferredPrompt=event;if(!supportsWebInstall)button.classList.add(\'is-installable\');});\n  window.addEventListener(\'appinstalled\',function(){deferredPrompt=null;markInstalled();notice(\'آریو با موفقیت روی دستگاه نصب شد.\');});\n  button.addEventListener(\'click\',async function(){\n    if(isStandalone()){notice(\'برنامه آریو روی این دستگاه نصب شده است.\');return;}\n    try{\n      if(supportsWebInstall){await navigator.install();markInstalled();notice(\'درخواست نصب آریو با موفقیت انجام شد.\');return;}\n      if(deferredPrompt){const promptEvent=deferredPrompt;deferredPrompt=null;await promptEvent.prompt();const result=await promptEvent.userChoice;if(result&&result.outcome===\'accepted\')markInstalled();else button.classList.remove(\'is-installable\');return;}\n      if(isIOS()){notice(\'برای افزودن آریو در آیفون، سایت را در Safari باز کن و از Share گزینهٔ Add to Home Screen را بزن. iOS نصب مستقیم با یک دکمه را در اختیار وب\u200cسایت نمی\u200cگذارد.\');return;}\n      if(!(\'serviceWorker\' in navigator)||!(location.protocol===\'https:\'||location.hostname===\'localhost\')){notice(\'برای نصب مستقیم، آریو باید با HTTPS در مرورگر پشتیبانی\u200cشده باز شود.\');return;}\n      await navigator.serviceWorker.register(\'/sw.js\',{scope:\'/\'});\n      notice(\'مرورگر هنوز پنجره نصب را فعال نکرده است. صفحه را یک\u200cبار تازه\u200cسازی کن و دوباره روی «نصب آریو» بزن.\');\n    }catch(error){if(error&&error.name===\'AbortError\')notice(\'نصب لغو شد؛ هر زمان خواستی دوباره روی «نصب آریو» بزن.\');else notice(\'نصب در این مرورگر شروع نشد. از مرورگر به\u200cروز و اتصال HTTPS استفاده کن.\');}\n  });\n  if(\'serviceWorker\' in navigator&&(location.protocol===\'https:\'||location.hostname===\'localhost\')){\n    window.addEventListener(\'load\',function(){navigator.serviceWorker.register(\'/sw.js\',{scope:\'/\'}).catch(()=>{});});\n  }\n})();\n</script>' + "\n</body>", 1)
@@ -6583,7 +6966,7 @@ html, body { max-width:100%; overflow-x:hidden !important; }
 }
 """
 BASE_TEMPLATE = BASE_TEMPLATE.replace("</head>", "<style id='ario-mobile-site-hotfix'>" + ARIO_MOBILE_SITE_CSS + "</style>\n</head>", 1)
-del ARIO_MOBILE_LOGIN_CSS, ARIO_MOBILE_SITE_CSS
+del ARIO_MOBILE_LOGIN_CSS, ARIO_MOBILE_SITE_CSS, ARIO_AUTH_LOGIN_REFINED_CSS
 
 
 
