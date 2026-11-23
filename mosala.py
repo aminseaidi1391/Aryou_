@@ -2479,7 +2479,21 @@ html[lang="ar"] body,html[lang="ar"] body *{font-family:'ArioNotoArabic',Tahoma,
       if(isIOSInstallBrowser()){installNotice('برای افزودن آریو در آیفون، سایت را در Safari باز کن و از Share گزینهٔ Add to Home Screen را بزن. iOS نصب مستقیم با یک دکمه را در اختیار وب‌سایت نمی‌گذارد.');return;}
       if(!('serviceWorker' in navigator)||!(location.protocol==='https:'||location.hostname==='localhost')){installNotice('برای نصب مستقیم، آریو باید با HTTPS در مرورگر پشتیبانی‌شده باز شود.');return;}
       await navigator.serviceWorker.register('/sw.js',{scope:'/'});
-      installNotice('مرورگر هنوز پنجره نصب را فعال نکرده است. صفحه را یک‌بار تازه‌سازی کن و دوباره روی «نصب آریو» بزن.');
+      // The browser owns the native install dialog. If it has not exposed
+      // beforeinstallprompt, provide the browser's manual install route instead
+      // of asking the user to reload repeatedly.
+      const ua=navigator.userAgent;
+      let guide='برای نصب آریو، از منوی مرورگر گزینهٔ نصب را انتخاب کن:';
+      if(ua.includes('Edg/')){
+        guide='در Microsoft Edge، منوی سه‌نقطه را باز کن و از بخش Apps گزینهٔ Install this site as an app را بزن.';
+      }else if(/Android/.test(ua)){
+        guide='در Chrome اندروید، منوی سه‌نقطه را باز کن و گزینهٔ Install app یا Add to Home screen را بزن.';
+      }else if(ua.includes('Chrome/')){
+        guide='در Chrome، روی نماد نصب در انتهای نوار آدرس کلیک کن؛ اگر آن را نمی‌بینی، منوی سه‌نقطه را باز کن و Cast, save and share سپس Install page as app را انتخاب کن.';
+      }else{
+        guide='منوی مرورگر را باز کن و گزینه‌ای مانند Install app، Install this site as an app یا Add to Home Screen را انتخاب کن. این گزینه به نوع مرورگر بستگی دارد.';
+      }
+      installNotice(guide);
     }catch(error){
       if(error&&error.name==='AbortError'){installNotice('نصب لغو شد؛ هر زمان خواستی دوباره روی «نصب آریو» بزن.');}
       else{installNotice('نصب در این مرورگر شروع نشد. از مرورگر به‌روز و اتصال HTTPS استفاده کن.');}
