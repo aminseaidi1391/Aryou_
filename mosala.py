@@ -1739,6 +1739,11 @@ body[data-theme="light"] .inner-page>.values-row>article>p{color:#5d6d86!importa
             <a href="/home" class="{{ 'active' if active_page == 'home' else '' }}">خانه</a>
             <a href="/about" class="{{ 'active' if active_page == 'about' else '' }}">درباره ما</a>
             <a href="/staff" class="{{ 'active' if active_page == 'staff' else '' }}">کادر مدرسه</a>
+            {% if session.get('role') == 'دانش‌آموز' %}
+                <a href="/counselor" class="{{ 'active' if active_page == 'counselor' else '' }}">بخش مشاور مدرسه</a>
+            {% elif session.get('role') == 'مشاور' %}
+                <a href="/counselor" class="{{ 'active' if active_page == 'counselor' else '' }}">صندوق پیام‌های مشاور</a>
+            {% endif %}
             <a href="/activities" class="{{ 'active' if active_page == 'activities' else '' }}">فعالیت‌ها</a>
             <a href="/library" class="{{ 'active' if active_page == 'library' else '' }}">کتابخانه</a>
             <a href="/news" class="{{ 'active' if active_page == 'news' else '' }}">اخبار</a>
@@ -4286,7 +4291,7 @@ def home():
         <p>در آریو، هر پرسش دریچه‌ای تازه است؛ با تجربه کردن، همکاری و کشف استعدادها، برای ساختن فردایی روشن‌تر آماده می‌شویم.</p>
       </section>
       <section class="home-stats" aria-label="آمار مدرسه">
-        <div><strong>04</strong><span>عضو معرفی‌شده کادر</span></div>
+        <div><strong>05</strong><span>عضو معرفی‌شده کادر</span></div>
         <div><strong>{activity_count:02d}</strong><span>فعالیت دانش‌آموزی</span></div>
         <div><strong>{news_count:02d}</strong><span>خبر و رویداد</span></div>
         <div class="live-visitor-stat"><strong id="dailyVisitorCount">01</strong><span>بازدید روزانه</span><small><i class="live-dot"></i><b id="onlineVisitorCount">1</b> نفر هم‌اکنون آنلاین</small></div>
@@ -4386,16 +4391,32 @@ def staff_page():
     if 'username' not in session: return redirect(url_for('index'))
     data = load_data()
     staff = data['sections'].get('staff', [])
-    # Ensure the two requested student-affairs deputies appear in the public staff list.
+    # Keep the requested school staff visible without duplicating existing entries.
     requested_staff = [
-        {"title": "جناب آقای عبداللهی", "text": "معاون پرورشی", "icon": "fa-user-tie"},
-        {"title": "جناب آقای تاج‌الدینی", "text": "معاون پرورشی شیفت دو", "icon": "fa-user-tie"}
+        {"title": "جناب آقای عبدالهی", "text": "معاون پرورشی", "icon": "fa-user-tie"},
+        {"title": "امیرحسین قاسمی نژاد", "text": "مشاور مدرسه", "icon": "fa-user-graduate"},
+        {"title": "جناب آقای تاج‌الدینی", "text": "معاون پرورشی شیفت دو", "icon": "fa-user-tie"},
+        {"title": "جناب آقای بیدار دل", "text": "سرایدار", "icon": "fa-user"}
     ]
-    existing_staff_titles = {str(item.get('title', '')).replace(' ', '').replace('‌', '') for item in staff}
+    normalize_staff_name = lambda value: str(value).replace(' ', '').replace('‌', '').replace('الله', 'اله')
+    existing_staff_titles = {normalize_staff_name(item.get('title', '')) for item in staff}
     for member in requested_staff:
-        normalized = member['title'].replace(' ', '').replace('‌', '')
+        normalized = normalize_staff_name(member['title'])
         if normalized not in existing_staff_titles:
             staff.append(member)
+            existing_staff_titles.add(normalized)
+        else:
+            # Keep the exact spelling requested by the school for this role.
+            for existing_member in staff:
+                if normalize_staff_name(existing_member.get('title', '')) == normalized and member['text'] == existing_member.get('text'):
+                    existing_member['title'] = member['title']
+                    break
+    # Keep the counselor card immediately above Mr. Tajaldini, even if entries already existed in saved data.
+    counselor_index = next((i for i, item in enumerate(staff) if 'قاسمی' in str(item.get('title', ''))), None)
+    tajaldini_index = next((i for i, item in enumerate(staff) if 'تاج' in str(item.get('title', '')) and 'الدینی' in str(item.get('title', ''))), None)
+    if counselor_index is not None and tajaldini_index is not None and counselor_index > tajaldini_index:
+        counselor_card = staff.pop(counselor_index)
+        staff.insert(tajaldini_index, counselor_card)
     cards_html = ''.join(f'<article class="staff-row premium-staff-card" data-reveal><div class="staff-portrait" aria-hidden="true"><span class="staff-portrait-halo"></span><i class="fas {safe_html(c.get("icon", "fa-user-tie"))}"></i><small>ARIO TEAM</small></div><div class="staff-row-copy"><span class="staff-role-kicker">همراهان مدرسه آریو</span><h3>{safe_html(localized_value(c, "title", ""))}</h3><p>{safe_html(localized_value(c, "text", ""))}</p></div><span class="staff-row-mark">ARIO</span></article>' for c in staff)
     content = f"""<main class="inner-page editorial-inner">
       <section class="inner-hero staff-hero"><div class="inner-hero-image" style="background-image:url('/ario-image/leaders')"></div><div class="inner-hero-overlay"></div><div class="inner-hero-copy"><span class="section-eyebrow">THE PEOPLE BEHIND ARIO</span><h1>آدم‌های <em>اثرگذار</em><br>آریو.</h1><p>آدم‌هایی که هر روز با دانش، تعهد و همراهی، مسیر رشد را روشن‌تر می‌کنند.</p></div></section>
@@ -4450,8 +4471,9 @@ def library_page():
           <h2>مسئولان کتابخانه</h2>
           <div class="library-names">
             <div><span>۰۱</span><strong>پرهام قاسم‌نژاد</strong></div>
+            <div><span>۰۲</span><strong>سبحان علیزاده</strong></div>
           </div>
-          <p>با همراهی و تلاش این دو عزیز، کتابخانه آریو پویاتر و منظم‌تر می‌شود.</p>
+          <p>با همراهی و تلاش این عزیزان، کتابخانه آریو پویاتر و منظم‌تر می‌شود.</p>
         </div>
       </section>
     </main>
@@ -5005,6 +5027,29 @@ ADMIN_HTML = BASE_TEMPLATE.replace("{% block content %}{% endblock %}", """
     
     {% if msg %}<div style="background: #d1fae5; color: #065f46; padding: 15px; border-radius: 10px; margin-bottom: 20px; text-align: center; font-weight: bold;">{{ msg }}</div>{% endif %}
 
+    <!-- مدیریت حساب مشاور؛ پیام‌ها فقط در حساب اختصاصی مشاور قابل مشاهده‌اند -->
+    <section class="admin-section ario-counselor-admin" id="ario-counselor-admin">
+      <h3><i class="fas fa-user-doctor"></i> مدیریت حساب مشاور مدرسه</h3>
+      <p>برای فعال‌کردن صندوق پیام، از فرم «افزودن کاربر» در بخش مدیریت کاربران، نقش «مشاور مدرسه» را انتخاب کنید. فقط یک حساب با این نقش مجاز است. مدیران می‌توانند حساب مشاور را مدیریت کنند، اما محتوای پیام‌های خصوصی دانش‌آموزان را نمی‌بینند.</p>
+      <div class="ario-counselor-account-list">
+        {% set counselor_accounts = data.users|dictsort if data.users else [] %}
+        {% set counselor_found = namespace(count=0) %}
+        {% for uname, uinfo in counselor_accounts %}
+          {% if uinfo.role == 'مشاور' %}
+            {% set counselor_found.count = counselor_found.count + 1 %}
+            <div class="ario-school-counselor-account"><strong>{{ uinfo.get('full_name', uname) }}</strong><span>نام کاربری: {{ uname }}</span><span class="ario-counselor-active">حساب مشاور فعال</span></div>
+          {% endif %}
+        {% endfor %}
+        {% if counselor_found.count == 0 %}<div class="ario-school-counselor-account"><strong>هنوز حساب مشاور ساخته نشده است.</strong><span>یک حساب کاربری با نقش «مشاور مدرسه» بسازید.</span></div>{% endif %}
+      </div>
+    </section>
+    <style>
+      .ario-counselor-admin{border:1px solid rgba(217,189,136,.3)!important;background:linear-gradient(145deg,#182f4b,#0b2038)!important;color:#eaf2ff!important}
+      .ario-counselor-admin h3{color:#f4e2bd!important}.ario-counselor-admin p{color:#bdcde0;line-height:2;font-size:.84rem}
+      .ario-counselor-account-list{display:grid;gap:9px}.ario-school-counselor-account{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:13px 15px;border:1px solid rgba(217,189,136,.2);border-radius:13px;background:rgba(255,255,255,.045)}
+      .ario-school-counselor-account strong{color:#fff}.ario-school-counselor-account span{color:#b9cbe0;font-size:.78rem}.ario-school-counselor-account .ario-counselor-active{color:#8cebd0;font-weight:800}
+    </style>
+
     <!-- مدیریت کامل کاربران -->
     <section class="admin-section ario-user-management" id="ario-user-section" aria-label="مدیریت همه کاربران">
       <style>
@@ -5026,7 +5071,9 @@ ADMIN_HTML = BASE_TEMPLATE.replace("{% block content %}{% endblock %}", """
         .ario-user-management .user-list-heading{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:14px 0 11px;color:#e8f2ff;font-size:.9rem;font-weight:850}
         .ario-user-management .user-list-heading small{color:#91a9c4;font-size:.72rem;font-weight:600}
         .ario-user-management .user-card[hidden]{display:none!important}
-        @media(max-width:720px){.ario-user-management .user-category-tabs{grid-template-columns:repeat(2,minmax(0,1fr))}}
+        .ario-user-management .user-category-tabs{grid-template-columns:repeat(5,minmax(0,1fr))}
+        @media(max-width:900px){.ario-user-management .user-category-tabs{grid-template-columns:repeat(3,minmax(0,1fr))}}
+        @media(max-width:600px){.ario-user-management .user-category-tabs{grid-template-columns:repeat(2,minmax(0,1fr))}}
         .ario-user-management .user-create-form{display:grid;grid-template-columns:1fr 1fr minmax(150px,.7fr) auto;gap:9px;margin:18px 0 22px;padding:15px;border:1px solid rgba(162,193,229,.14);border-radius:17px;background:rgba(255,255,255,.035)}
         .ario-user-management .user-create-form input,.ario-user-management .user-create-form select{min-width:0;width:100%;border:1px solid rgba(162,193,229,.2)!important;background:rgba(255,255,255,.08)!important;color:#fff!important;border-radius:11px!important;padding:11px 12px!important}
         .ario-user-management .user-create-form select option{color:#122033;background:#fff}
@@ -5062,6 +5109,7 @@ ADMIN_HTML = BASE_TEMPLATE.replace("{% block content %}{% endblock %}", """
         <select name="role" aria-label="نقش کاربر جدید">
           <option value="دانش‌آموز">دانش‌آموز</option>
           <option value="معلم">معلم</option>
+          <option value="مشاور">مشاور مدرسه</option>
         </select>
         <button type="submit" class="btn-success"><i class="fas fa-user-plus"></i> افزودن کاربر</button>
       </form>
@@ -5076,12 +5124,13 @@ ADMIN_HTML = BASE_TEMPLATE.replace("{% block content %}{% endblock %}", """
         <button class="user-category-tab" type="button" data-user-filter="students" aria-pressed="false"><span><i class="fas fa-user-graduate"></i> دانش‌آموزان</span><span class="category-count">{{ data.users.values()|selectattr('role','equalto','دانش‌آموز')|list|length }}</span></button>
         <button class="user-category-tab" type="button" data-user-filter="teachers" aria-pressed="false"><span><i class="fas fa-chalkboard-teacher"></i> معلمان</span><span class="category-count">{{ data.users.values()|selectattr('role','equalto','معلم')|list|length }}</span></button>
         <button class="user-category-tab" type="button" data-user-filter="parents" aria-pressed="false"><span><i class="fas fa-people-roof"></i> والدین</span><span class="category-count">{{ data.users.values()|selectattr('role','in',['والد','والدین','سرپرست'])|list|length }}</span></button>
+        <button class="user-category-tab" type="button" data-user-filter="counselors" aria-pressed="false"><span><i class="fas fa-comments"></i> مشاور</span><span class="category-count">{{ data.users.values()|selectattr('role','equalto','مشاور')|list|length }}</span></button>
       </div>
       <div class="user-list-heading"><span id="arioUserCategoryTitle">فهرست مدیران</span><small>برای مشاهده هر گروه، دسته‌بندی مربوط را انتخاب کن</small></div>
       <div class="user-cards" id="arioAllUsersList">
         {% for uname, uinfo in data.users|dictsort %}
           {% set user_is_admin = uinfo.role in ['مدیر سایت (شما)', 'مدیر مدرسه'] %}
-          {% set user_category = 'managers' if user_is_admin else ('teachers' if uinfo.role == 'معلم' else ('parents' if uinfo.role in ['والد','والدین','سرپرست'] else 'students')) %}
+          {% set user_category = 'managers' if user_is_admin else ('counselors' if uinfo.role == 'مشاور' else ('teachers' if uinfo.role == 'معلم' else ('parents' if uinfo.role in ['والد','والدین','سرپرست'] else 'students'))) %}
           <article class="user-card" data-user-card data-category="{{ user_category }}" data-search="{{ (uname ~ ' ' ~ uinfo.role)|lower }}" {% if user_category != 'managers' %}hidden{% endif %}>
             <div class="user-card-main">
               <span class="user-avatar"><i class="fas fa-user" aria-hidden="true"></i></span>
@@ -5134,7 +5183,7 @@ ADMIN_HTML = BASE_TEMPLATE.replace("{% block content %}{% endblock %}", """
         const tabs=Array.from(document.querySelectorAll('[data-user-filter]'));
         const title=document.getElementById('arioUserCategoryTitle');
         if(!input||!count||!empty)return;
-        const titles={managers:'فهرست مدیران',students:'فهرست دانش‌آموزان',teachers:'فهرست معلمان',parents:'فهرست والدین'};
+        const titles={managers:'فهرست مدیران',students:'فهرست دانش‌آموزان',teachers:'فهرست معلمان',parents:'فهرست والدین',counselors:'حساب مشاور مدرسه'};
         let activeCategory='managers';
         function filterUsers(){
           const q=input.value.trim().toLocaleLowerCase();let visible=0;
@@ -5397,6 +5446,113 @@ ADMIN_HTML = BASE_TEMPLATE.replace("{% block content %}{% endblock %}", """
 </div>
 """)
 # ==========================================
+# پیام خصوصی دانش‌آموزان به مشاور مدرسه
+# ==========================================
+@app.route('/counselor', methods=['GET'])
+def counselor_portal():
+    if 'username' not in session:
+        return redirect(url_for('index'))
+    data, portal = _school_load()
+    username = session.get('username')
+    role = session.get('role')
+    token = _school_csrf()
+
+    if role == 'مشاور':
+        messages = [m for m in portal.get('counselor_messages', []) if isinstance(m, dict)]
+        messages.sort(key=lambda m: m.get('created_sort', ''), reverse=True)
+        cards = []
+        inbox_changed = False
+        for item in messages:
+            if item.get('status') == 'new':
+                item['status'] = 'seen'
+                inbox_changed = True
+            cards.append(
+                '<article class="ario-counselor-message">'
+                f'<div class="ario-counselor-message-head"><div><span class="ario-counselor-tag">پیام دانش‌آموز</span><h3>{_school_html(item.get("student_name", item.get("student_username", "دانش‌آموز")))}</h3>'
+                f'<small>{_school_html(item.get("class_label", "کلاس ثبت‌نشده"))} · {_school_html(item.get("date", ""))}</small></div><span class="ario-counselor-status">{ "پاسخ داده‌شده" if item.get("response") else "در انتظار پاسخ" }</span></div>'
+                f'<strong class="ario-counselor-subject">{_school_html(item.get("subject", "بدون موضوع"))}</strong><p>{_school_html(item.get("body", ""))}</p>'
+                f'<form method="post" action="/counselor/reply/{_school_html(item.get("id", ""))}" class="ario-counselor-reply"><input type="hidden" name="csrf_token" value="{_school_html(token)}"><label>پاسخ محرمانه به دانش‌آموز<textarea name="response" maxlength="4000" required placeholder="پاسخ خود را بنویسید...">{_school_html(item.get("response", ""))}</textarea></label><button class="ario-school-btn primary" type="submit">ذخیره و ارسال پاسخ</button></form>'
+                '</article>'
+            )
+        if inbox_changed:
+            save_data(data)
+        content = f'''<main class="ario-school-wrap ario-counselor-page"><section class="ario-school-hero"><span class="ario-school-eyebrow">PRIVATE COUNSELOR INBOX</span><h1>صندوق پیام‌های مشاور</h1><p>این صندوق فقط برای حساب اختصاصی مشاور مدرسه قابل مشاهده است. مدیران، دبیران، والدین و سایر کاربران به متن پیام‌ها دسترسی ندارند.</p><span class="ario-school-chip">{len(messages)} پیام ثبت‌شده</span></section><section class="ario-counselor-list">{"".join(cards) or '<div class="ario-school-empty">هنوز پیامی از دانش‌آموزان دریافت نشده است.</div>'}</section></main>'''
+        return _school_page(content, 'صندوق پیام‌های مشاور', 'counselor')
+
+    if role != 'دانش‌آموز':
+        abort(403)
+    account = data.get('users', {}).get(username, {})
+    class_id = account.get('school_class_id')
+    class_access_ok = bool(class_id and class_id in portal.get('classes', {}) and _school_class_access_approved(account))
+    own_messages = [m for m in portal.get('counselor_messages', []) if isinstance(m, dict) and m.get('student_username') == username]
+    own_messages.sort(key=lambda m: m.get('created_sort', ''), reverse=True)
+    history = ''.join(
+        '<article class="ario-counselor-message ario-counselor-own">'
+        f'<div class="ario-counselor-message-head"><div><span class="ario-counselor-tag">پیام شما</span><h3>{_school_html(m.get("subject", "پیام"))}</h3><small>{_school_html(m.get("date", ""))}</small></div></div>'
+        f'<p>{_school_html(m.get("body", ""))}</p>'
+        + (f'<div class="ario-counselor-response"><strong>پاسخ مشاور</strong><p>{_school_html(m.get("response", ""))}</p></div>' if m.get('response') else '<small class="ario-counselor-waiting">پیام شما به‌صورت محرمانه برای مشاور ارسال شده و در انتظار پاسخ است.</small>')
+        + '</article>' for m in own_messages
+    )
+    if class_access_ok:
+        form_html = f'''<form method="post" action="/counselor/send" class="ario-school-panel ario-counselor-compose"><input type="hidden" name="csrf_token" value="{_school_html(token)}"><h2>ارسال پیام محرمانه به مشاور</h2><p>پیام فقط در صندوق حساب مشاور مدرسه نمایش داده می‌شود. سایر دانش‌آموزان، والدین، دبیران و مدیران به متن آن دسترسی ندارند.</p><label class="ario-school-field">موضوع پیام<input name="subject" maxlength="120" required placeholder="مثلاً درخواست گفت‌وگوی خصوصی"></label><label class="ario-school-field" style="margin-top:12px">متن پیام<textarea name="body" maxlength="4000" required placeholder="پیامت را با خیال راحت و محترمانه بنویس..."></textarea></label><div class="ario-school-form-actions"><button class="ario-school-btn primary" type="submit">ارسال محرمانه به مشاور</button></div></form>'''
+    else:
+        form_html = '<div class="ario-school-notice">ارسال پیام برای دانش‌آموزانی فعال است که عضویت آن‌ها در یکی از کلاس‌های مدرسه تأیید شده باشد. درخواست کلاس شما هنوز تأیید نشده یا کلاسی به حساب شما اختصاص نیافته است.</div>'
+    content = f'''<main class="ario-school-wrap ario-counselor-page"><section class="ario-school-hero"><span class="ario-school-eyebrow">ARIO STUDENT SUPPORT</span><h1>بخش مشاور مدرسه</h1><p>اگر درباره درس، دوستی‌ها، نگرانی‌ها یا مسائل مدرسه نیاز به گفت‌وگو داری، می‌توانی به‌صورت محرمانه برای مشاور مدرسه پیام بفرستی.</p><span class="ario-school-chip">ویژه دانش‌آموزان تأییدشده آریو</span></section>{form_html}<section class="ario-school-section"><div class="ario-school-section-head"><div><h2>پیام‌های من</h2><p>فقط پیام‌هایی که خودت ارسال کرده‌ای و پاسخ مشاور</p></div></div><div class="ario-counselor-list">{history or '<div class="ario-school-empty">هنوز پیامی ارسال نکرده‌ای.</div>'}</div></section></main>'''
+    return _school_page(content, 'بخش مشاور مدرسه', 'counselor')
+
+@app.route('/counselor/send', methods=['POST'])
+def counselor_send_message():
+    if 'username' not in session or session.get('role') != 'دانش‌آموز':
+        abort(403)
+    if not _school_valid_csrf():
+        abort(400)
+    data, portal = _school_load()
+    username = session.get('username')
+    account = data.get('users', {}).get(username, {})
+    class_id = account.get('school_class_id')
+    if not (class_id and class_id in portal.get('classes', {}) and _school_class_access_approved(account)):
+        abort(403)
+    subject = request.form.get('subject', '').strip()[:120]
+    body = request.form.get('body', '').strip()[:4000]
+    if len(subject) < 2 or len(body) < 5:
+        return redirect(url_for('counselor_portal'))
+    cls = portal.get('classes', {}).get(class_id, {})
+    now = _school_now()
+    portal.setdefault('counselor_messages', []).append({
+        'id': secrets.token_urlsafe(12), 'student_username': username,
+        'student_name': account.get('full_name') or username,
+        'class_id': class_id, 'class_label': _school_class_label(cls),
+        'subject': subject, 'body': body, 'response': '', 'status': 'new',
+        'date': _ario_shamsi_date(now.strftime('%Y-%m-%d')) + ' ' + now.strftime('%H:%M'),
+        'created_sort': now.strftime('%Y-%m-%d %H:%M:%S')
+    })
+    save_data(data)
+    return redirect(url_for('counselor_portal'))
+
+@app.route('/counselor/reply/<message_id>', methods=['POST'])
+def counselor_reply_message(message_id):
+    if 'username' not in session or session.get('role') != 'مشاور':
+        abort(403)
+    if not _school_valid_csrf():
+        abort(400)
+    data, portal = _school_load()
+    response_text = request.form.get('response', '').strip()[:4000]
+    if len(response_text) < 2:
+        return redirect(url_for('counselor_portal'))
+    found = False
+    for item in portal.get('counselor_messages', []):
+        if isinstance(item, dict) and hmac.compare_digest(str(item.get('id', '')), str(message_id)):
+            item['response'] = response_text
+            item['responded_at'] = _school_now().strftime('%Y-%m-%d %H:%M:%S')
+            item['status'] = 'answered'
+            found = True
+            break
+    if not found:
+        abort(404)
+    save_data(data)
+    return redirect(url_for('counselor_portal'))
+
+# ==========================================
 # روت‌های پنل مدیریت
 # ==========================================
 @app.route('/admin')
@@ -5508,8 +5664,10 @@ def add_user():
     uname = request.form.get('username', '').strip()
     password = request.form.get('password', '')
     role = request.form.get('role', 'دانش‌آموز')
-    if role not in ('دانش‌آموز', 'معلم'):
-        return redirect(url_for('admin', msg='برای ساخت حساب جدید فقط نقش دانش‌آموز یا معلم قابل انتخاب است؛ ارتقای ادمین از دکمهٔ مخصوص انجام می‌شود.'))
+    if role not in ('دانش‌آموز', 'معلم', 'مشاور'):
+        return redirect(url_for('admin', msg='نقش انتخاب‌شده معتبر نیست.'))
+    if role == 'مشاور' and any(info.get('role') == 'مشاور' for info in data.get('users', {}).values()):
+        return redirect(url_for('admin', msg='حساب مشاور مدرسه از قبل وجود دارد؛ برای حفظ محرمانگی فقط یک حساب مشاور مجاز است.'))
     if len(uname) < 3 or len(uname) > 32 or len(password) < 6:
         return redirect(url_for('admin', msg='نام کاربری باید ۳ تا ۳۲ نویسه و رمز حداقل ۶ نویسه باشد.'))
     if uname in data['users']:
@@ -7623,7 +7781,8 @@ def _school_ensure_structure(data):
 
     for key, default in (('attendance', {}), ('grades', []), ('homework', []),
                          ('announcements', []), ('exams', []), ('exam_attempts', []),
-                         ('enrollment_requests', []), ('device_accounts', {}), ('parent_links', {})):
+                         ('enrollment_requests', []), ('device_accounts', {}), ('parent_links', {}),
+                         ('counselor_messages', [])):
         if not isinstance(portal.get(key), type(default)):
             portal[key] = default
             changed = True
@@ -7779,6 +7938,8 @@ def _school_page(content, title='مدرسه‌یار', active_page='school'):
     .ario-school-notice{padding:12px 15px;border-radius:13px;margin:14px 0;background:rgba(114,223,192,.1);border:1px solid rgba(114,223,192,.25);color:#a9f0dc;font-size:.82rem}.ario-school-empty{padding:25px;text-align:center;color:#a9bfd8;border:1px dashed rgba(155,189,230,.24);border-radius:17px}.ario-school-chip{display:inline-flex;padding:5px 9px;border-radius:999px;background:rgba(114,223,192,.12);color:#8ce8d0;font-size:.7rem;font-weight:800}
     .ario-parent-children-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}.ario-parent-child-card{min-width:0;padding:22px;border-radius:22px;background:radial-gradient(circle at 92% 0%,rgba(114,223,192,.13),transparent 38%),linear-gradient(145deg,#123653,#091e34);border:1px solid rgba(155,189,230,.19);box-shadow:0 16px 38px rgba(0,0,0,.12)}.ario-parent-child-card h2{font-size:1.12rem;margin:15px 0 3px;color:#f4f8ff}.ario-parent-username{color:#9fb8d2;font-size:.72rem;overflow-wrap:anywhere}.ario-parent-child-top,.ario-school-parent-head{display:flex;justify-content:space-between;align-items:center;gap:12px}.ario-parent-child-index{font-size:.7rem;color:#9ddfd5}.ario-parent-mini-stats{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;margin:17px 0}.ario-parent-mini-stats div{padding:12px;border-radius:13px;background:rgba(255,255,255,.045);border:1px solid rgba(155,189,230,.12);min-width:0}.ario-parent-mini-stats strong,.ario-parent-mini-stats small{display:block;overflow-wrap:anywhere}.ario-parent-mini-stats strong{font-size:1.05rem;color:#9cebd8}.ario-parent-mini-stats small{font-size:.68rem;color:#a9bfd7;margin-top:3px}.ario-parent-attendance-strip{display:flex;gap:7px;flex-wrap:wrap;margin:10px 0 16px}.ario-parent-attendance-strip span{padding:6px 9px;border-radius:9px;background:rgba(255,255,255,.05);color:#c5d7ea;font-size:.7rem}.ario-school-parent-head h3{margin:9px 0 2px}.ario-school-parent-head small{color:#9fb8d2;font-size:.72rem}.ario-school-parent-head>i{font-size:1.6rem;color:#9de7d7}.ario-parent-linked-list{display:grid;gap:8px;margin:16px 0}.ario-parent-linked-child{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:11px 12px;border:1px solid rgba(155,189,230,.13);background:rgba(255,255,255,.035);border-radius:13px}.ario-parent-linked-child strong,.ario-parent-linked-child small{display:block;overflow-wrap:anywhere}.ario-parent-linked-child strong{font-size:.82rem}.ario-parent-linked-child small{font-size:.68rem;color:#9fb8d2;margin-top:3px}.ario-school-parent-link-form{display:flex;align-items:end;gap:10px;flex-wrap:wrap;margin-top:12px}.ario-school-parent-link-form .ario-school-field{flex:1;min-width:210px}.ario-school-parent-link-form button:disabled{opacity:.45;cursor:not-allowed}body[data-theme="light"] .ario-parent-child-card{background:linear-gradient(145deg,#fff,#edf6ff);border-color:#d5e3f2;box-shadow:0 12px 30px rgba(27,54,86,.06)}body[data-theme="light"] .ario-parent-child-card h2{color:#193654}body[data-theme="light"] .ario-parent-username,body[data-theme="light"] .ario-parent-mini-stats small,body[data-theme="light"] .ario-parent-linked-child small{color:#60758f}body[data-theme="light"] .ario-parent-mini-stats div,body[data-theme="light"] .ario-parent-linked-child{background:#f6f9fd;border-color:#dbe6f2}body[data-theme="light"] .ario-parent-attendance-strip span{background:#edf3fa;color:#42617f}
     @media(max-width:760px){.ario-parent-children-grid{grid-template-columns:1fr}.ario-parent-child-card{padding:17px}.ario-school-parent-link-form{align-items:stretch;flex-direction:column}.ario-school-parent-link-form .ario-school-field,.ario-school-parent-link-form button{width:100%}.ario-parent-linked-child{align-items:flex-start;flex-direction:column}.ario-parent-linked-child form,.ario-parent-linked-child button{width:100%}}
+    .ario-counselor-list{display:grid;gap:14px}.ario-counselor-message{padding:20px;border:1px solid rgba(155,189,230,.2);border-radius:18px;background:linear-gradient(145deg,#123252,#091e34);box-shadow:0 12px 28px rgba(0,0,0,.1);min-width:0}.ario-counselor-message-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap}.ario-counselor-message-head h3{margin:7px 0 2px;color:#f4f8ff}.ario-counselor-message-head small,.ario-counselor-waiting{color:#9fb8d2;font-size:.72rem}.ario-counselor-tag{color:#e5c88f;font-size:.68rem;font-weight:900}.ario-counselor-status{padding:6px 9px;border-radius:9px;background:rgba(114,223,192,.1);color:#91e8d2;font-size:.68rem}.ario-counselor-subject{display:block;margin:16px 0 7px;color:#e7d4ae}.ario-counselor-message>p,.ario-counselor-response p{white-space:pre-wrap;overflow-wrap:anywhere;color:#c6d6e8;line-height:2;font-size:.84rem}.ario-counselor-reply{display:grid;gap:10px;margin-top:15px;padding-top:15px;border-top:1px solid rgba(155,189,230,.14)}.ario-counselor-reply label,.ario-counselor-compose>label{display:grid;gap:7px;color:#c8d8e9;font-size:.78rem}.ario-counselor-reply textarea{width:100%;min-height:90px;resize:vertical;border:1px solid rgba(161,192,229,.24);border-radius:11px;padding:12px;background:#0a2038;color:#f4f8ff;font:inherit}.ario-counselor-compose h2{color:#f3f7ff;font-size:1.1rem;margin:0 0 8px}.ario-counselor-compose>p{color:#afc4db;font-size:.78rem;line-height:1.9;margin-bottom:15px}.ario-counselor-response{margin-top:14px;padding:13px;border-radius:13px;background:rgba(114,223,192,.08);border:1px solid rgba(114,223,192,.18)}.ario-counselor-response strong{color:#8ce8d0;font-size:.78rem}.ario-counselor-response p{margin:5px 0 0}.ario-counselor-page .ario-school-hero{margin-bottom:18px}
+    @media(max-width:760px){.ario-counselor-message{padding:16px}.ario-counselor-message-head{flex-direction:column}}
     .ario-school-grade-group{margin:14px 0;border:1px solid rgba(155,189,230,.18);border-radius:20px;overflow:hidden;background:linear-gradient(145deg,rgba(18,49,78,.62),rgba(8,25,44,.72));box-shadow:0 12px 28px rgba(0,0,0,.08)}
     .ario-school-grade-group>summary,.ario-school-class-fold>summary{list-style:none;cursor:pointer;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:17px 19px;color:#eef6ff;font-weight:900}
     .ario-school-grade-group>summary::-webkit-details-marker,.ario-school-class-fold>summary::-webkit-details-marker{display:none}
