@@ -2447,47 +2447,36 @@ html[lang="ar"] body,html[lang="ar"] body *{font-family:'ArioNotoArabic',Tahoma,
   }
   if(input)input.addEventListener('input',()=>{window.clearTimeout(timer);timer=window.setTimeout(runSearch,220);});
 
-  // PWA install: prefer the modern Web Install API, then fall back to beforeinstallprompt.
+  // PWA install: keep the browser's install event on this page and invoke it only from a user click.
+  const installButton=document.querySelector('[data-ario-install]');
   let installEvent=null;
-  const supportsWebInstall=typeof Navigator!=='undefined'&&typeof Navigator.prototype.install==='function';
   const isIOSInstallBrowser=()=>/iphone|ipad|ipod/i.test(navigator.userAgent)&&!window.MSStream;
   function installNotice(message){
     let node=document.getElementById('ario-install-notice');
     if(!node){node=document.createElement('div');node.id='ario-install-notice';node.setAttribute('role','status');node.setAttribute('aria-live','polite');node.style.cssText='position:fixed;z-index:11000;bottom:22px;left:16px;right:16px;max-width:560px;margin:auto;padding:15px 18px;border-radius:15px;background:#102f50;color:#fff;box-shadow:0 16px 40px rgba(0,0,0,.32);font:600 13px/2 Vazirmatn,sans-serif;text-align:center';document.body.appendChild(node);}
     node.textContent=message;node.hidden=false;clearTimeout(installNotice.timer);installNotice.timer=setTimeout(()=>node.hidden=true,8500);
-  function manualInstallHelp(){const ua=navigator.userAgent||'';if(/iphone|ipad|ipod/i.test(ua))return 'برای نصب آریو در آیفون: سایت را با Safari باز کن، Share را بزن و «Add to Home Screen» را انتخاب کن.';if(/android/i.test(ua))return 'برای نصب آریو: منوی سه‌نقطه Chrome یا Edge را باز کن و «Install app» یا «Add to Home screen» را بزن.';if(/edg\\//i.test(ua))return 'برای نصب آریو در Edge: از منوی سه‌نقطه گزینه Apps و سپس Install this site as an app را انتخاب کن؛ یا آیکون نصب کنار نوار آدرس را بزن.';return 'برای نصب آریو در Chrome: آیکون نصب کنار نوار آدرس را بزن؛ یا از منوی سه‌نقطه، Cast, save and share و سپس Install page as app را انتخاب کن.';}
+  }
+  function manualInstallHelp(){
+    const ua=navigator.userAgent||'';
+    if(/iphone|ipad|ipod/i.test(ua))return 'در این مرورگر امکان بازکردن پنجره نصب با دکمه وجود ندارد؛ برای افزودن آریو باید از گزینه Add to Home Screen در Safari استفاده شود.';
+    return 'مرورگر در حال حاضر پنجره نصب مستقیم را ارائه نکرده است. وقتی امکان نصب فعال شود، با زدن همین دکمه پنجره نصب باز می‌شود.';
   }
   function markArioInstalled(){if(!installButton)return;installButton.classList.remove('is-installable');installButton.classList.add('is-installed');installButton.setAttribute('aria-label','برنامه آریو نصب شده است');}
-  if(installButton&&supportsWebInstall)installButton.classList.add('is-installable');
-  window.addEventListener('beforeinstallprompt',event=>{event.preventDefault();installEvent=event;if(installButton&&!supportsWebInstall)installButton.classList.add('is-installable');});
+  window.addEventListener('beforeinstallprompt',event=>{event.preventDefault();installEvent=event;if(installButton)installButton.classList.add('is-installable');});
   window.addEventListener('appinstalled',()=>{installEvent=null;markArioInstalled();installNotice('آریو با موفقیت روی دستگاه نصب شد.');});
   if(installButton)installButton.addEventListener('click',async()=>{
     if(window.matchMedia('(display-mode: standalone)').matches||window.navigator.standalone===true){installNotice('برنامه آریو روی این دستگاه نصب شده است.');return;}
-    installButton.setAttribute('aria-disabled','true');
+    if(!installEvent){installNotice(manualInstallHelp());return;}
+    const promptEvent=installEvent;installEvent=null;
     try{
-      if(supportsWebInstall){
-        // Must be invoked synchronously from this click to preserve user activation.
-        await navigator.install();markArioInstalled();installNotice('درخواست نصب آریو با موفقیت انجام شد.');return;
-      }
-      if(installEvent){
-        const promptEvent=installEvent;installEvent=null;
-        await promptEvent.prompt();
-        const choice=await promptEvent.userChoice;
-        if(choice&&choice.outcome==='accepted'){markArioInstalled();installNotice('آریو با موفقیت نصب شد.');}
-        else{installButton.classList.add('is-installable');installNotice('درخواست نصب بسته شد. '+manualInstallHelp());}
-        return;
-      }
-      if(isIOSInstallBrowser()){installNotice('برای افزودن آریو در آیفون، سایت را در Safari باز کن و از Share گزینهٔ Add to Home Screen را بزن. iOS نصب مستقیم با یک دکمه را در اختیار وب‌سایت نمی‌گذارد.');return;}
-      if(!('serviceWorker' in navigator)||!(location.protocol==='https:'||location.hostname==='localhost')){installNotice('برای نصب مستقیم، آریو باید با HTTPS در مرورگر پشتیبانی‌شده باز شود.');return;}
-      await navigator.serviceWorker.register('/sw.js',{scope:'/'});
-      installNotice(manualInstallHelp());
-    }catch(error){
-      if(error&&error.name==='AbortError'){installNotice('درخواست نصب بسته شد. '+manualInstallHelp());}
-      else{installNotice('نصب در این مرورگر شروع نشد. از مرورگر به‌روز و اتصال HTTPS استفاده کن.');}
-    }finally{installButton.removeAttribute('aria-disabled');}
+      await promptEvent.prompt();
+      const choice=await promptEvent.userChoice;
+      if(choice&&choice.outcome==='accepted'){markArioInstalled();installNotice('آریو با موفقیت نصب شد.');}
+      else{installNotice('درخواست نصب بسته شد. هر زمان مرورگر دوباره امکان نصب را فعال کند، با زدن همین دکمه پنجره نصب باز می‌شود.');}
+    }catch(error){installNotice('مرورگر نتوانست پنجره نصب را باز کند. کمی بعد دوباره همین دکمه را امتحان کن.');}
   });
-  if('serviceWorker' in navigator && (location.protocol==='https:'||location.hostname==='localhost')){
-    window.addEventListener('load',()=>navigator.serviceWorker.register('/sw.js').catch(()=>{}));
+  if('serviceWorker' in navigator&&(location.protocol==='https:'||location.hostname==='localhost')){
+    window.addEventListener('load',()=>navigator.serviceWorker.register('/sw.js',{scope:'/'}).catch(()=>{}));
   }
   const topButton=document.getElementById('arioBackToTop');
   if(topButton){const update=()=>topButton.classList.toggle('show',window.scrollY>420);window.addEventListener('scroll',update,{passive:true});update();topButton.addEventListener('click',()=>window.scrollTo({top:0,behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth'}));}
@@ -7032,7 +7021,7 @@ AUTH_HTML = AUTH_HTML.replace("</style>", ARIO_AUTH_LOGIN_REFINED_CSS + "\n</sty
 
 # One-click PWA install button and install prompt on the login page.
 AUTH_HTML = AUTH_HTML.replace("</style>", "\n.ario-auth-install-trigger{display:inline-flex;align-items:center;justify-content:center;gap:8px;min-height:40px;padding:9px 13px;border:1px solid rgba(114,223,192,.38);border-radius:13px;background:linear-gradient(135deg,rgba(35,105,125,.42),rgba(24,66,103,.58));color:#eaf8ff;font:800 .78rem 'Vazirmatn',sans-serif;white-space:nowrap;cursor:pointer;box-shadow:0 8px 22px rgba(0,0,0,.12);transition:transform .18s ease,border-color .18s ease,background .18s ease}\n.ario-auth-install-trigger i{color:#72dfc0;font-size:1rem}\n.ario-auth-install-trigger:hover,.ario-auth-install-trigger:focus-visible{transform:translateY(-1px);border-color:#72dfc0;outline:none}\n.ario-auth-install-trigger.is-installable{background:linear-gradient(135deg,#147d75,#17639a);border-color:#72dfc0;box-shadow:0 0 0 3px rgba(114,223,192,.12),0 10px 24px rgba(0,0,0,.18)}\n.ario-auth-install-trigger.is-installed{opacity:.78}\n@media(max-width:760px){.ario-auth-install-trigger{min-height:37px;padding:8px 10px;gap:6px;font-size:.72rem;border-radius:11px}.ario-auth-install-trigger i{font-size:.9rem}}\n@media(max-width:360px){.ario-auth-install-trigger span{display:none}.ario-auth-install-trigger{width:39px;padding:0;flex:0 0 39px}}\n" + "\n</style>", 1)
-AUTH_HTML = AUTH_HTML.replace("</body>", '<script id="ario-auth-pwa-install">\n(function(){\n  \'use strict\';\n  const button=document.querySelector(\'[data-ario-install]\');\n  if(!button)return;\n  let deferredPrompt=null;\n  const supportsWebInstall=typeof Navigator!==\'undefined\'&&typeof Navigator.prototype.install===\'function\';\n  const isStandalone=()=>window.matchMedia(\'(display-mode: standalone)\').matches||window.navigator.standalone===true;\n  const isIOS=()=>/iphone|ipad|ipod/i.test(navigator.userAgent)&&!window.MSStream;\n  function notice(message){\n    let node=document.getElementById(\'ario-install-notice\');\n    if(!node){node=document.createElement(\'div\');node.id=\'ario-install-notice\';node.setAttribute(\'role\',\'status\');node.setAttribute(\'aria-live\',\'polite\');node.style.cssText=\'position:fixed;z-index:99999;bottom:18px;left:14px;right:14px;max-width:520px;margin:auto;padding:15px 17px;border:1px solid rgba(114,223,192,.35);border-radius:16px;background:#0d2743;color:#f4f8ff;box-shadow:0 18px 50px #0007;font:700 13px/2 Vazirmatn,Tahoma,sans-serif;text-align:center;\';document.body.appendChild(node);}\n    node.textContent=message;node.hidden=false;clearTimeout(notice.timer);notice.timer=setTimeout(()=>{node.hidden=true;},8500);\n  }\n  function markInstalled(){button.classList.remove(\'is-installable\');button.classList.add(\'is-installed\');button.innerHTML=\'<i class="fa-solid fa-circle-check" aria-hidden="true"></i><span>آریو نصب شد</span>\';button.setAttribute(\'aria-label\',\'برنامه آریو نصب شده است\');}\n  if(isStandalone())markInstalled();\n  if(supportsWebInstall)button.classList.add(\'is-installable\');\n  window.addEventListener(\'beforeinstallprompt\',function(event){event.preventDefault();deferredPrompt=event;if(!supportsWebInstall)button.classList.add(\'is-installable\');});\n  window.addEventListener(\'appinstalled\',function(){deferredPrompt=null;markInstalled();notice(\'آریو با موفقیت روی دستگاه نصب شد.\');});\n  button.addEventListener(\'click\',async function(){\n    if(isStandalone()){notice(\'برنامه آریو روی این دستگاه نصب شده است.\');return;}\n    try{\n      if(supportsWebInstall){await navigator.install();markInstalled();notice(\'درخواست نصب آریو با موفقیت انجام شد.\');return;}\n      if(deferredPrompt){const promptEvent=deferredPrompt;deferredPrompt=null;await promptEvent.prompt();const result=await promptEvent.userChoice;if(result&&result.outcome===\'accepted\')markInstalled();else{button.classList.add(\'is-installable\');notice(\'درخواست نصب بسته شد. در Chrome یا Edge از منوی سه‌نقطه گزینه Install app یا Add to Home screen را انتخاب کن.\');}return;}\n      if(isIOS()){notice(\'برای افزودن آریو در آیفون، سایت را در Safari باز کن و از Share گزینهٔ Add to Home Screen را بزن. iOS نصب مستقیم با یک دکمه را در اختیار وب\u200cسایت نمی\u200cگذارد.\');return;}\n      if(!(\'serviceWorker\' in navigator)||!(location.protocol===\'https:\'||location.hostname===\'localhost\')){notice(\'برای نصب مستقیم، آریو باید با HTTPS در مرورگر پشتیبانی\u200cشده باز شود.\');return;}\n      await navigator.serviceWorker.register(\'/sw.js\',{scope:\'/\'});\n      notice(\'برای نصب آریو در Chrome یا Edge، از منوی سه‌نقطه گزینه Install app یا Add to Home screen را انتخاب کن.\');\n    }catch(error){if(error&&error.name===\'AbortError\')notice(\'درخواست نصب بسته شد. از منوی مرورگر گزینه Install app یا Add to Home screen را انتخاب کن.\');else notice(\'نصب در این مرورگر شروع نشد. از مرورگر به\u200cروز و اتصال HTTPS استفاده کن.\');}\n  });\n  if(\'serviceWorker\' in navigator&&(location.protocol===\'https:\'||location.hostname===\'localhost\')){\n    window.addEventListener(\'load\',function(){navigator.serviceWorker.register(\'/sw.js\',{scope:\'/\'}).catch(()=>{});});\n  }\n})();\n</script>' + "\n</body>", 1)
+AUTH_HTML = AUTH_HTML.replace("</body>", '<script id="ario-auth-pwa-install">\n(function(){\n  \'use strict\';\n  const button=document.querySelector(\'[data-ario-install]\');\n  if(!button)return;\n  let deferredPrompt=null;\n  const isStandalone=()=>window.matchMedia(\'(display-mode: standalone)\').matches||window.navigator.standalone===true;\n  function notice(message){\n    let node=document.getElementById(\'ario-install-notice\');\n    if(!node){node=document.createElement(\'div\');node.id=\'ario-install-notice\';node.setAttribute(\'role\',\'status\');node.setAttribute(\'aria-live\',\'polite\');node.style.cssText=\'position:fixed;z-index:99999;bottom:18px;left:14px;right:14px;max-width:520px;margin:auto;padding:15px 17px;border:1px solid rgba(114,223,192,.35);border-radius:16px;background:#0d2743;color:#f4f8ff;box-shadow:0 18px 50px #0007;font:700 13px/2 Vazirmatn,Tahoma,sans-serif;text-align:center;\';document.body.appendChild(node);}\n    node.textContent=message;node.hidden=false;clearTimeout(notice.timer);notice.timer=setTimeout(()=>{node.hidden=true;},8500);\n  }\n  function markInstalled(){button.classList.remove(\'is-installable\');button.classList.add(\'is-installed\');button.innerHTML=\'<i class="fa-solid fa-circle-check" aria-hidden="true"></i><span>آریو نصب شد</span>\';button.setAttribute(\'aria-label\',\'برنامه آریو نصب شده است\');}\n  if(isStandalone())markInstalled();\n  window.addEventListener(\'beforeinstallprompt\',function(event){event.preventDefault();deferredPrompt=event;button.classList.add(\'is-installable\');});\n  window.addEventListener(\'appinstalled\',function(){deferredPrompt=null;markInstalled();notice(\'آریو با موفقیت روی دستگاه نصب شد.\');});\n  button.addEventListener(\'click\',async function(){\n    if(isStandalone()){notice(\'برنامه آریو روی این دستگاه نصب شده است.\');return;}\n    if(!deferredPrompt){notice(\'مرورگر هنوز پنجره نصب مستقیم را برای این صفحه فعال نکرده است. به محض فعال‌شدن، با زدن همین دکمه پنجره نصب باز می‌شود.\');return;}\n    const promptEvent=deferredPrompt;deferredPrompt=null;\n    try{await promptEvent.prompt();const result=await promptEvent.userChoice;if(result&&result.outcome===\'accepted\')markInstalled();else notice(\'درخواست نصب بسته شد. اگر مرورگر دوباره اجازه نصب بدهد، همین دکمه پنجره نصب را باز می‌کند.\');}\n    catch(error){notice(\'مرورگر نتوانست پنجره نصب را باز کند. کمی بعد دوباره امتحان کن.\');}\n  });\n  if(\'serviceWorker\' in navigator&&(location.protocol===\'https:\'||location.hostname===\'localhost\'))window.addEventListener(\'load\',function(){navigator.serviceWorker.register(\'/sw.js\',{scope:\'/\'}).catch(()=>{});});\n})();\n</script>' + "\\n</body>", 1)
 
 ARIO_MOBILE_SITE_CSS = r"""
 /* Mobile content safety: all post-login sections remain visible even when
