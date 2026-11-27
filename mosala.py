@@ -8018,9 +8018,13 @@ def _school_page(content, title='مدرسه‌یار', active_page='school'):
     @media(max-width:390px){.ario-school-grid{grid-template-columns:1fr}.ario-school-kpi strong{font-size:1.45rem}}
     </style>
     """
-    html = BASE_TEMPLATE.replace("{% block content %}{% endblock %}", style + content)
+    # Keep dynamic page content (especially inline JS with curly braces) out of
+    # Jinja parsing. Inject it only after the base template has been rendered.
+    _school_content_marker = "__ARIO_SCHOOL_CONTENT_SAFE_INJECTION__"
+    html = BASE_TEMPLATE.replace("{% block content %}{% endblock %}", style + _school_content_marker)
     html = html.replace("{{ title }}", title).replace("{{ active_page }}", active_page)
-    return render_template_string(html)
+    rendered = render_template_string(html)
+    return rendered.replace(_school_content_marker, content)
 
 
 def _school_require_login():
@@ -8860,7 +8864,85 @@ def ario_school_class(class_id):
             'آمادگی دفاعی': ['امنیت','تهدید و دفاع','پدافند غیرعامل','آمادگی در برابر بحران','کمک‌های اولیه','ایمنی','دفاع و مسئولیت','مهارت‌های فردی','کار گروهی','شناخت خطر','مدیریت بحران','مرور'],
         }
         subject_cards = ''.join(f'<button type="button" class="ario-school-card ario-note-subject" data-note-subject="{_school_html(subject)}" style="text-align:right;cursor:pointer"><div class="ario-school-card-top"><span>کتابخانه آموزشی</span><i class="fas fa-book-open"></i></div><h3>{_school_html(subject)}</h3><p>فهرست فصل‌ها و درسنامه‌های این درس</p><span class="ario-school-chip">{chapter_counts.get(subject,10)} بخش آموزشی · ورود به درس</span></button>' for subject in subjects_by_grade.get(grade_num, []))
-        student_materials_html = f'''<section class="ario-school-panel" style="margin-top:22px"><h2>📚 کتابخانه درسنامه‌های کلاس من</h2><p>درس را انتخاب کنید، فصل موردنظر را باز کنید و درسنامه را مطالعه یا چاپ کنید.</p><div class="ario-school-grid">{subject_cards}</div><div id="ario-note-chapters" class="ario-school-panel" style="display:none;margin-top:18px"></div><div id="ario-note-reader" class="ario-school-panel" style="display:none;margin-top:18px"></div><style>#ario-note-chapters .ario-note-chapter,#ario-note-reader .ario-note-back{cursor:pointer}#ario-note-reader{line-height:2.1;font-size:1.02rem}#ario-note-reader h2,#ario-note-reader h3{color:#72c7ff}#ario-note-reader .note-illustration{padding:18px;border-radius:18px;background:linear-gradient(135deg,#183b60,#26345b);text-align:center;font-size:1.3rem;margin:18px 0}#ario-note-reader .note-summary{border-right:4px solid #65d6ad;padding:12px 16px;background:rgba(80,180,140,.09);border-radius:12px}</style><script>(function(){{const chapters={json.dumps(chapter_names,ensure_ascii=False)};const box=document.getElementById('ario-note-chapters'),reader=document.getElementById('ario-note-reader');if(!box||!reader)return;document.querySelectorAll('[data-note-subject]').forEach(b=>b.addEventListener('click',()=>{{const subject=b.dataset.noteSubject;const list=chapters[subject]||Array.from({{length:10}},(_,i)=>'بخش '+(i+1));box.style.display='block';reader.style.display='none';box.innerHTML='<h3>📖 '+subject+' · فهرست درس‌ها</h3><div class="ario-school-grid">'+list.map((name,i)=>'<button class="ario-school-card ario-note-chapter" data-ch="'+i+'" style="text-align:right"><b>بخش '+(i+1)+'</b><p>'+name+'</p><span class="ario-school-chip">مشاهده درسنامه</span></button>').join('')+'</div>';box.querySelectorAll('[data-ch]').forEach(c=>c.addEventListener('click',()=>{{const idx=Number(c.dataset.ch),title=list[idx];reader.style.display='block';reader.innerHTML='<button class="ario-school-btn ario-note-back" onclick="document.getElementById(\'ario-note-chapters\').scrollIntoView({{behavior:\'smooth\'}})">← بازگشت به فهرست</button><h2>'+subject+'</h2><h3>بخش '+(idx+1)+' · '+title+'</h3><div class="note-illustration">📘 درسنامه آموزشی آریو<br><small>یادگیری مفهومی · مثال · مرور</small></div><h3>هدف یادگیری</h3><p>در این بخش با مفاهیم اصلی موضوع آشنا می‌شوید، واژه‌ها و نکته‌های کلیدی را می‌آموزید و برای تمرین و مرور آماده می‌شوید.</p><h3>شرح موضوع</h3><p>موضوع این بخش، <b>'+title+'</b> است. هنگام مطالعه، ابتدا تعریف‌ها و مفهوم‌های مهم را با دقت بخوانید. سپس ارتباط میان مفهوم‌ها را بررسی کنید و نکته‌های مهم را در دفتر خود یادداشت کنید. برای یادگیری بهتر، مثال‌های کتاب درسی را مرحله‌به‌مرحله بررسی و تمرین‌های مرتبط را حل کنید.</p><h3>روش مطالعه پیشنهادی</h3><ul><li>متن کتاب را یک بار با تمرکز بخوانید.</li><li>واژه‌ها و نکته‌های مهم را مشخص کنید.</li><li>یک مثال یا فعالیت مرتبط انجام دهید.</li><li>بدون نگاه به متن، آموخته‌های خود را توضیح دهید.</li></ul><div class="note-summary"><b>جمع‌بندی:</b> عنوان این بخش «'+title+'» است. برای تسلط، مرور نکته‌ها و حل تمرین‌های کتاب درسی ضروری است.</div><p style="margin-top:20px"><button class="ario-school-btn" onclick="window.print()">🖨 چاپ / ذخیره PDF</button></p>';reader.scrollIntoView({{behavior:'smooth'}});}}));box.scrollIntoView({{behavior:'smooth'}});}}));}})();</script></section>'''
+    student_materials_html = f'''
+    <section class="ario-school-panel" style="margin-top:22px">
+        <h2>📚 کتابخانه درسنامه‌های کلاس من</h2>
+        <p>
+            درس را انتخاب کنید، فصل موردنظر را باز کنید
+            و درسنامه را مطالعه یا چاپ کنید.
+        </p>
+
+        <div class="ario-school-grid">
+            {subject_cards}
+        </div>
+
+        <div id="ario-note-chapters"
+            class="ario-school-panel"
+            style="display:none;margin-top:18px">
+        </div>
+
+        <div id="ario-note-reader"
+            class="ario-school-panel"
+            style="display:none;margin-top:18px">
+        </div>
+        <script>
+        (function() {{
+            const chapters = {json.dumps(chapter_names, ensure_ascii=False)};
+            const shelf = document.currentScript && document.currentScript.parentElement;
+            if (!shelf) return;
+            const chapterBox = shelf.querySelector('#ario-note-chapters');
+            const reader = shelf.querySelector('#ario-note-reader');
+            let currentSubject = '';
+            function safe(value) {{
+                return String(value).replace(/[&<>\"']/g, function(ch) {{
+                    return {{'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}}[ch];
+                }});
+            }}
+            shelf.querySelectorAll('[data-note-subject]').forEach(function(card) {{
+                card.addEventListener('click', function() {{
+                    currentSubject = card.getAttribute('data-note-subject') || '';
+                    const list = chapters[currentSubject] || [];
+                    chapterBox.innerHTML = '<h3>📖 ' + safe(currentSubject) + ' · فهرست درس‌ها</h3>' +
+                        '<div class="ario-school-grid">' + list.map(function(name, i) {{
+                            return '<button type="button" class="ario-school-card" data-chapter-index="' + i + '"><b>درس ' + (i + 1) + '</b><p>' + safe(name) + '</p><span class="ario-school-chip">بازکردن درسنامه</span></button>';
+                        }}).join('') + '</div>';
+                    chapterBox.style.display = 'block';
+                    reader.style.display = 'none';
+                    chapterBox.scrollIntoView({{behavior:'smooth',block:'start'}});
+                }});
+            }});
+            chapterBox.addEventListener('click', function(event) {{
+                const card = event.target.closest('[data-chapter-index]');
+                if (!card) return;
+                const idx = Number(card.getAttribute('data-chapter-index'));
+                const title = (chapters[currentSubject] || [])[idx] || '';
+                reader.innerHTML = '<button type="button" class="ario-school-btn" data-note-back>← بازگشت به فهرست فصل‌ها</button>' +
+                    '<h2>' + safe(currentSubject) + '</h2><h3>درس ' + (idx + 1) + ' · ' + safe(title) + '</h3>' +
+                    '<div class="note-illustration">📘 درسنامه آموزشی آریو<br><small>متن آموزشی · مثال · تصویر · مرور</small></div>' +
+                    '<h3>هدف یادگیری</h3><p>در این درس با مفهوم «' + safe(title) + '» آشنا می‌شوید و نکته‌های اصلی را مرور می‌کنید.</p>' +
+                    '<h3>توضیح درس</h3><p>ابتدا مفهوم را با دقت بخوانید، واژه‌ها و نکته‌های کلیدی را یادداشت کنید و مثال‌های مرتبط را مرحله‌به‌مرحله بررسی کنید.</p>' +
+                    '<h3>فعالیت</h3><p>یک نمونه از موضوع درس پیدا کنید، آن را با آموخته‌ها توضیح دهید و پاسخ خود را در دفتر بنویسید.</p>' +
+                    '<h3>مرور و تمرین</h3><ul><li>نکته‌های مهم درس را خلاصه کنید.</li><li>یک تمرین مرتبط حل کنید.</li><li>مطلب را با زبان خود توضیح دهید.</li></ul>' +
+                    '<div class="note-summary"><b>جمع‌بندی:</b> مطالعه متن، بررسی مثال و انجام تمرین به یادگیری بهتر کمک می‌کند.</div>' +
+                    '<p><button type="button" class="ario-school-btn" data-note-print>🖨 چاپ / ذخیره PDF</button></p>';
+                reader.style.display = 'block';
+                reader.scrollIntoView({{behavior:'smooth',block:'start'}});
+            }});
+            reader.addEventListener('click', function(event) {{
+                if (event.target.closest('[data-note-back]')) {{ reader.style.display = 'none'; chapterBox.scrollIntoView({{behavior:'smooth',block:'start'}}); }}
+                if (event.target.closest('[data-note-print]')) window.print();
+            }});
+        }})();
+        </script>
+        <style>
+            #ario-note-chapters [data-chapter-index], #ario-note-reader button {{cursor:pointer;}}
+            #ario-note-reader {{line-height:2.1;font-size:1.02rem;}}
+            #ario-note-reader h2,#ario-note-reader h3 {{color:#72c7ff;}}
+            #ario-note-reader .note-illustration {{padding:18px;border-radius:18px;background:linear-gradient(135deg,#183b60,#26345b);text-align:center;font-size:1.3rem;margin:18px 0;}}
+            #ario-note-reader .note-summary {{border-right:4px solid #65d6ad;padding:12px 16px;background:rgba(80,180,140,.09);border-radius:12px;}}
+        </style>
+    </section>
+    '''
     content = f'''<main class="ario-school-wrap"><a class="ario-school-back" href="/school"><i class="fas fa-arrow-right"></i> بازگشت به مدرسه‌یار</a><section class="ario-school-hero"><span class="ario-school-eyebrow">CLASSROOM · ARIO SCHOOL</span><h1>{_school_html(_school_class_label(cls))}</h1><p>فضای اختصاصی کلاس برای حضور و غیاب، ارزیابی آموزشی، تکالیف و برنامه هفتگی.</p>{student_materials_html}<div class="ario-school-actions"><span class="ario-school-chip">{len(students)} دانش‌آموز</span><span class="ario-school-chip">{len(teacher_names)} دبیر از ۱۳</span></div></section>{actions}{teacher_manage}{roster_html}{admin_panels}</main>'''
     return _school_page(content, _school_class_label(cls), 'school')
 
